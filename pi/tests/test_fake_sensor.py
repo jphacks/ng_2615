@@ -79,12 +79,13 @@ def test_recording_round_trip_and_playback(tmp_path):
     sensor = FakeSensor(realtime=False)
     sensor.open()
     frames = read_all(sensor, 1.0)
-    path = tmp_path / "rec.npz"
+    path = tmp_path / "rec"
     recording.save(path, frames, {"fps": 25, "note": "test"})
 
     rec = recording.Recording(path)
     assert len(rec) == len(frames)
-    assert rec.meta["note"] == "test"
+    assert rec.meta["note"] == "test" and rec.meta["frames"] == len(frames)
+    assert isinstance(rec.depth, np.memmap)  # 全部は読み込まない
     assert np.allclose(rec.frame(3).depth, frames[3].depth, atol=0.005)
 
     player = FakeSensor(recording=path, realtime=False)
@@ -92,3 +93,29 @@ def test_recording_round_trip_and_playback(tmp_path):
     played = [player.read() for _ in range(len(frames) + 1)]
     assert played[-1].t > played[-2].t  # 繰り返しても時刻は進む
     assert player.truth_boxes == []
+
+
+def test_recording_survives_interruption(tmp_path):
+    """録画が途中で止まって meta が古いままでも、書けたフレームまでは読める。"""
+    sensor = FakeSensor(realtime=False)
+    sensor.open()
+    path = tmp_path / "rec"
+    w = recording.RecordingWriter(path, {"note": "途中で止まる"})
+    for _ in range(5):
+        w.append(sensor.read())
+    for f in (w._depth, w._amplitude, w._t):  # close() を呼ばずに止まったつもり
+        f.flush()
+    assert len(recording.Recording(path)) == 5
+
+
+def test_old_npz_recordings_still_load(tmp_path):
+    sensor = FakeSensor(realtime=False)
+    sensor.open()
+    frames = read_all(sensor, 0.2)
+    path = tmp_path / "old.npz"
+    np.savez(path, depth=np.stack([f.depth for f in frames]).astype(np.float16),
+             confidence=np.stack([f.amplitude for f in frames]).astype(np.float16),
+             amplitude=np.stack([f.amplitude for f in frames]).astype(np.float16),
+             t=np.array([f.t for f in frames]), meta=np.array('{"fps": 25}'))
+    rec = recording.Recording(path)
+    assert len(rec) == len(frames) and rec.meta["fps"] == 25

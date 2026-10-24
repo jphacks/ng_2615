@@ -21,7 +21,7 @@ PERSON = 0          # COCO の person
 NMS_IOU = 0.45
 PAD_VALUE = 114
 STRIDES = (8, 16, 32)
-THREADS = 3         # Pi 4 は 4 コア。1 コアはスレッドA（25fps の取得・追跡・送信）とサーバーに残す
+THREADS = 3         # Pi 4 は 4 コア。1 コアはスレッドA（30fps の取得・追跡・送信）とサーバーに残す
 
 
 def to_gray(amplitude: np.ndarray) -> np.ndarray:
@@ -97,6 +97,9 @@ class Detector:
         options.intra_op_num_threads = threads
         options.inter_op_num_threads = 1
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        # Pi はメモリが少ない（1GB）ので、作業用メモリを先にまとめて確保しない（少し遅くなる代わりに小さくなる）
+        options.enable_cpu_mem_arena = False
+        options.enable_mem_pattern = False
         self.session = ort.InferenceSession(str(model_path), options, providers=["CPUExecutionProvider"])
         model_input = self.session.get_inputs()[0]
         self.input_name = model_input.name

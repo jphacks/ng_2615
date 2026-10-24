@@ -23,10 +23,12 @@ def test_make_frame_converts_units_rotation_and_weak_pixels():
     depth_mm[0, 0] = 1500.0         # 左上 → 180° 回して右下へ
     depth_mm[0, 1] = 3000.0
     amp[0, 1] = MIN_AMPLITUDE - 1   # 弱い画素 → 測れない（0）
-    f = make_frame(depth_mm, amp, t=1.0)
+    f = make_frame(depth_mm, amp, t=1.0, rotate_180=True)
     assert f.depth.dtype == np.float32 and f.depth.shape == (H, W)
     assert f.depth[H - 1, W - 1] == pytest.approx(1.5)
     assert f.depth[H - 1, W - 2] == 0
+    g = make_frame(depth_mm, amp, t=1.0, rotate_180=False)  # 回さなければ左上のまま
+    assert g.depth[0, 0] == pytest.approx(1.5) and g.depth[0, 1] == 0
     assert np.array_equal(f.confidence, f.amplitude)
 
 

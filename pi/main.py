@@ -1,4 +1,4 @@
-"""スレッドA（25fps）：取得 → 枠の追従 → 距離 → 追跡 → TTC → 送信。
+"""スレッドA（センサーと同じ 30fps）：取得 → 枠の追従 → 距離 → 追跡 → TTC → 送信。
 
 スレッドB（DetectionWorker）は、最新の振幅画像に検出をかけて、BBOX を A に渡す。
 A は検出を待たない。新しい枠がないフレームは、前回の枠のまま距離だけ更新する（仕様書 5章）。
@@ -9,6 +9,7 @@ A は検出を待たない。新しい枠がないフレームは、前回の枠
 """
 
 import argparse
+import socket
 import threading
 import time
 from pathlib import Path
@@ -18,6 +19,7 @@ import numpy as np
 import protocol
 from datatypes import Box
 from fake_sensor import FakeDetector, FakeSensor
+from sensor import stop_on_signals
 from server import PORT, Server
 from track import Tracker
 
@@ -67,6 +69,16 @@ class DetectionWorker(threading.Thread):
             last = now
 
 
+def lan_ip() -> str | None:
+    """同じ Wi-Fi の端末から開くときの、この機械の IP アドレス（Pi なら PC から開くのに使う）。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("10.255.255.255", 1))  # 実際には何も送らない。外向きに使う IP を調べるだけ
+            return s.getsockname()[0]
+        except OSError:
+            return None
+
+
 def build(args: argparse.Namespace):
     if args.fake or args.recording:
         sensor = FakeSensor(recording=args.recording)
@@ -89,7 +101,7 @@ def build(args: argparse.Namespace):
 def main() -> None:
     parser = argparse.ArgumentParser(description="USHIROMI（Pi 側）")
     parser.add_argument("--fake", action="store_true", help="センサーなし（合成データ）")
-    parser.add_argument("--recording", type=Path, help="録画（.npz）を再生する")
+    parser.add_argument("--recording", type=Path, help="録画（record.py で撮ったフォルダー、または以前の .npz）を再生する")
     parser.add_argument("--detector", choices=["fake", "yolox"], help="既定：--fake なら fake、それ以外は yolox")
     parser.add_argument("--model", type=Path, default=Path(__file__).parent / "models" / "yolox_nano_256x192.onnx")
     parser.add_argument("--detect-fps", type=float, default=5.0, help="検出の上限 fps（偽の検出を本物の速さに近づける）")
@@ -98,6 +110,7 @@ def main() -> None:
     if args.detector is None:
         args.detector = "fake" if args.fake else "yolox"
 
+    stop_on_signals()
     sensor, detector = build(args)
     server = Server(port=args.port)
     worker = DetectionWorker(detector, max_fps=args.detect_fps)
@@ -106,7 +119,10 @@ def main() -> None:
     sensor.open()
     server.start()
     worker.start()
-    print(f"http://localhost:{server.port}/ を開いてください（Ctrl+C で終了）", flush=True)
+    print(f"ブラウザで開く：http://localhost:{server.port}/", flush=True)
+    if (ip := lan_ip()) is not None:
+        print(f"  同じ Wi-Fi の PC・スマホから：http://{ip}:{server.port}/", flush=True)
+    print("（Ctrl+C で終了）", flush=True)
 
     seq = 0
     fps = 0.0
