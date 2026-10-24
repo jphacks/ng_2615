@@ -1,7 +1,7 @@
 """スレッドB：振幅画像から人の BBOX を得る（仕様書 M2）。
 
 モデルは仮で YOLOX-Nano（ONNX Runtime）。録画を見てから選ぶ。
-前処理（正規化・余白）は train/ と同じにすること。
+重みは YOLOX 公式の学習済み ONNX を pi/models/ に置く（Git に入れない）。
 """
 
 from pathlib import Path

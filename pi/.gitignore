@@ -3,7 +3,7 @@
 __pycache__/
 *.pyc
 
-# モデルの重み（train/ で作って、ここにコピーする）
+# モデルの重み（YOLOX 公式の ONNX をダウンロードして置く）
 models/*
 !models/.gitkeep
 

@@ -1,5 +1,5 @@
 # リポジトリ全体に共通するもの
-# pi/ web/ train/ それぞれのツールが作るものは、各フォルダーの .gitignore に書く
+# pi/ web/ それぞれのツールが作るものは、各フォルダーの .gitignore に書く
 
 # OS
 .DS_Store
