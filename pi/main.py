@@ -9,6 +9,7 @@ A は検出を待たない。新しい枠がないフレームは、前回の枠
 """
 
 import argparse
+import socket
 import threading
 import time
 from pathlib import Path
@@ -67,6 +68,16 @@ class DetectionWorker(threading.Thread):
             last = now
 
 
+def lan_ip() -> str | None:
+    """同じ Wi-Fi の端末から開くときの、この機械の IP アドレス（Pi なら PC から開くのに使う）。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("10.255.255.255", 1))  # 実際には何も送らない。外向きに使う IP を調べるだけ
+            return s.getsockname()[0]
+        except OSError:
+            return None
+
+
 def build(args: argparse.Namespace):
     if args.fake or args.recording:
         sensor = FakeSensor(recording=args.recording)
@@ -106,7 +117,10 @@ def main() -> None:
     sensor.open()
     server.start()
     worker.start()
-    print(f"http://localhost:{server.port}/ を開いてください（Ctrl+C で終了）", flush=True)
+    print(f"ブラウザで開く：http://localhost:{server.port}/", flush=True)
+    if (ip := lan_ip()) is not None:
+        print(f"  同じ Wi-Fi の PC・スマホから：http://{ip}:{server.port}/", flush=True)
+    print("（Ctrl+C で終了）", flush=True)
 
     seq = 0
     fps = 0.0

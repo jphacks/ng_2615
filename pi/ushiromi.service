@@ -1,0 +1,18 @@
+# 電源を入れたら USHIROMI を自動で起動する（任意。デモ用）。入れ方は pi/手順書.md の「8. 自動で起動する」。
+# User と WorkingDirectory は、Pi のユーザー名に合わせて書き換える。
+[Unit]
+Description=USHIROMI（背後の接近を知らせる）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/ng_2615/pi
+ExecStart=/home/pi/.local/bin/uv run --no-sync main.py
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGINT
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

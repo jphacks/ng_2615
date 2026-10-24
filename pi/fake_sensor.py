@@ -98,6 +98,8 @@ class FakeSensor:
     def open(self) -> None:
         if self.recording_path is not None:
             self._recording = Recording(self.recording_path)
+            # 録画に撮ったときの fps が書いてあれば、その速さで流す（record.py は実測の fps を書く）
+            self.fps = float(self._recording.meta.get("fps", self.fps))
         self._i = 0
         self._start = time.perf_counter()
 
