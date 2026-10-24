@@ -2,7 +2,7 @@
 
   uv run record.py --seconds 30
 
-出力は recordings/ に置く（Git に入れない）。ファイル形式は共通部分で決める。
+出力は recordings/ に置く（Git に入れない）。書き込みは recording.save() を使う（形式は仕様書 11章）。
 """
 
 
