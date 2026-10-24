@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from recording import RecordingWriter
-from sensor import MIN_AMPLITUDE, RANGE_MM, ROTATE_180, Sensor
+from sensor import MIN_AMPLITUDE, RANGE_MM, ROTATE_180, Sensor, stop_on_signals
 
 
 def main() -> None:
@@ -24,6 +24,7 @@ def main() -> None:
     args = parser.parse_args()
     out = args.out or Path(__file__).parent / "recordings" / f"{datetime.now():%Y%m%d-%H%M%S}"
 
+    stop_on_signals()
     sensor = Sensor()
     sensor.open()
     meta = {"range_mm": RANGE_MM, "rotate_180": ROTATE_180, "min_amplitude": MIN_AMPLITUDE,

@@ -19,6 +19,7 @@ import numpy as np
 import protocol
 from datatypes import Box
 from fake_sensor import FakeDetector, FakeSensor
+from sensor import stop_on_signals
 from server import PORT, Server
 from track import Tracker
 
@@ -109,6 +110,7 @@ def main() -> None:
     if args.detector is None:
         args.detector = "fake" if args.fake else "yolox"
 
+    stop_on_signals()
     sensor, detector = build(args)
     server = Server(port=args.port)
     worker = DetectionWorker(detector, max_fps=args.detect_fps)

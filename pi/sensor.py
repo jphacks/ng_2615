@@ -9,6 +9,7 @@ SDK の生データを Frame に直す処理（make_frame）は、実機と録�
   uv run sensor.py     # センサーだけを動かして、fps・距離・振幅を表示する（つながっているかの確認）
 """
 
+import signal
 import time
 
 import numpy as np
@@ -23,6 +24,19 @@ MIN_AMPLITUDE = 30.0    # 振幅がこれより弱い画素の深度はでたら
 RANGE_MM = 4000         # Far モード（2000 か 4000）
 TIMEOUT_MS = 2000       # 1 フレームを待つ時間
 MAX_MISSES = 5          # 続けてこの回数フレームが来なければ、止まったとみなす
+
+
+def stop_on_signals() -> None:
+    """Ctrl+C（SIGINT）でも kill・systemctl stop（SIGTERM）でも、KeyboardInterrupt にして後片付け（センサーを閉じる）させる。
+
+    nohup … & などで裏で起動すると SIGINT が無視される設定で始まるので、ここで元に戻す。
+    閉じずに終わると、次に起動したプログラムがセンサーを開けなくなることがある。
+    """
+    def interrupt(*_):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, interrupt)
 
 
 def make_frame(depth_raw: np.ndarray, amplitude_raw: np.ndarray, t: float, rotate_180: bool = ROTATE_180) -> Frame:
@@ -96,6 +110,7 @@ class Sensor:
 
 def main() -> None:
     """センサーだけを動かして、つながっているかを確かめる（Ctrl+C で終了）。"""
+    stop_on_signals()
     sensor = Sensor()
     sensor.open()
     try:
