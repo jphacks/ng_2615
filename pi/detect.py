@@ -1,8 +1,9 @@
 """スレッドB：振幅画像から人の BBOX を得る（仕様書 M2）。
 
-モデルは YOLOX-Nano（YOLOX 公式の学習済み ONNX、Apache 2.0）。重みは pi/models/ に置く（Git に入れない）。
-  curl -L -o pi/models/yolox_nano.onnx \\
-    https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_nano.onnx
+モデルは YOLOX-Nano（YOLOX 公式の学習済みの重み、Apache 2.0）。重みは pi/models/ に置く（Git に入れない）。
+既定は入力 256×192 で書き出し直したもの（公式の 416×416 より約 3.5 倍速い。センサーと同じ 4:3）。PC で一度だけ：
+  uv run scripts/export_yolox_onnx.py          # → pi/models/yolox_nano_256x192.onnx
+公式の 416×416 のもの（yolox_nano.onnx）もそのまま使える（入力の大きさはモデルから読む）。
 
 前処理・後処理の考え方は YOLOX 公式の ONNX 推論サンプル（demo/ONNXRuntime/onnx_inference.py）に合わせている：
 余白 114 で左上に寄せて正方形に拡大、正規化なし（0〜255 のまま）、出力をグリッドと stride で枠に戻す。
@@ -20,6 +21,7 @@ PERSON = 0          # COCO の person
 NMS_IOU = 0.45
 PAD_VALUE = 114
 STRIDES = (8, 16, 32)
+THREADS = 3         # Pi 4 は 4 コア。1 コアはスレッドA（25fps の取得・追跡・送信）とサーバーに残す
 
 
 def to_gray(amplitude: np.ndarray) -> np.ndarray:
@@ -28,25 +30,27 @@ def to_gray(amplitude: np.ndarray) -> np.ndarray:
     return (np.sqrt(np.clip(amplitude / hi, 0, 1)) * 255).astype(np.float32)
 
 
-def letterbox(gray: np.ndarray, size: int) -> tuple[np.ndarray, float]:
-    """白黒画像 (H, W) → モデルの入力 (1, 3, size, size)。縦横比を保って拡大し、余りは 114 で埋める。"""
+def letterbox(gray: np.ndarray, size: tuple[int, int]) -> tuple[np.ndarray, float]:
+    """白黒画像 (H, W) → モデルの入力 (1, 3, 高さ, 幅)。縦横比を保って拡大・縮小し、余りは 114 で埋める。"""
     h, w = gray.shape
-    r = min(size / h, size / w)
+    in_h, in_w = size
+    r = min(in_h / h, in_w / w)
     nh, nw = int(h * r), int(w * r)
     ys = np.minimum((np.arange(nh) / r).astype(int), h - 1)
     xs = np.minimum((np.arange(nw) / r).astype(int), w - 1)
-    padded = np.full((3, size, size), PAD_VALUE, dtype=np.float32)
+    padded = np.full((3, in_h, in_w), PAD_VALUE, dtype=np.float32)
     padded[:, :nh, :nw] = gray[ys][:, xs]
     return padded[None], r
 
 
-def _grid(size: int) -> tuple[np.ndarray, np.ndarray]:
+def _grid(size: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    in_h, in_w = size
     grids, strides = [], []
     for s in STRIDES:
-        n = size // s
-        yv, xv = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
+        ny, nx = in_h // s, in_w // s
+        yv, xv = np.meshgrid(np.arange(ny), np.arange(nx), indexing="ij")
         grids.append(np.stack((xv, yv), 2).reshape(-1, 2))
-        strides.append(np.full((n * n, 1), s))
+        strides.append(np.full((ny * nx, 1), s))
     return np.concatenate(grids).astype(np.float32), np.concatenate(strides).astype(np.float32)
 
 
@@ -85,13 +89,18 @@ def decode(output: np.ndarray, grid: np.ndarray, stride: np.ndarray, r: float, s
 
 
 class Detector:
-    def __init__(self, model_path: Path, score_threshold: float = 0.35) -> None:
+    def __init__(self, model_path: Path, score_threshold: float = 0.35, threads: int = THREADS) -> None:
         if not model_path.exists():
-            raise SystemExit(f"モデルがありません: {model_path}\n取り方は pi/detect.py の先頭を見てください。")
+            raise SystemExit(f"モデルがありません: {model_path}\n作り方は pi/detect.py の先頭を見てください。")
         self.score_threshold = score_threshold
-        self.session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
-        self.input_name = self.session.get_inputs()[0].name
-        self.size = self.session.get_inputs()[0].shape[2]  # 公式の YOLOX-Nano は 416
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = threads
+        options.inter_op_num_threads = 1
+        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        self.session = ort.InferenceSession(str(model_path), options, providers=["CPUExecutionProvider"])
+        model_input = self.session.get_inputs()[0]
+        self.input_name = model_input.name
+        self.size = (model_input.shape[2], model_input.shape[3])  # (高さ, 幅)。既定のモデルは (192, 256)
         self.grid, self.stride = _grid(self.size)
 
     def detect(self, amplitude: np.ndarray) -> list[Box]:
