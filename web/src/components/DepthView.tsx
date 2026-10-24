@@ -100,12 +100,6 @@ function drawPerson(ctx: CanvasRenderingContext2D, p: Person, scale: number) {
     ctx.lineTo(x, y + dy * c);
   }
   ctx.stroke();
-
-  // 肩のリング
-  ctx.lineWidth = 2 * s;
-  ctx.beginPath();
-  ctx.ellipse(bx + bw / 2, by + bh * 0.2, bw * 0.42, bw * 0.12, 0, 0, Math.PI * 2);
-  ctx.stroke();
   ctx.restore();
 
   // ラベル（ID・距離／速度・TTC）
