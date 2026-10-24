@@ -17,7 +17,7 @@ from datatypes import H, W, Frame
 
 # 実データ（test_data）で分かった、SDK の生データの癖（仕様書 11章「実データで分かったこと」）
 DEPTH_SCALE = 0.001     # 深度は mm で来る → m に直す
-ROTATE_180 = True       # 画像が上下逆さまで来る（センサーの付け方による。付け方を変えたらここを直す）
+ROTATE_180 = False      # 実機の今の付け方では正しい向きで来る。逆さまに付けたら True に（test_data は逆さまだった）
 MIN_AMPLITUDE = 30.0    # 振幅がこれより弱い画素の深度はでたらめなので、測れない（0）にする（公式サンプルの初期値も 30）
 
 RANGE_MM = 4000         # Far モード（2000 か 4000）
@@ -25,7 +25,7 @@ TIMEOUT_MS = 2000       # 1 フレームを待つ時間
 MAX_MISSES = 5          # 続けてこの回数フレームが来なければ、止まったとみなす
 
 
-def make_frame(depth_raw: np.ndarray, amplitude_raw: np.ndarray, t: float) -> Frame:
+def make_frame(depth_raw: np.ndarray, amplitude_raw: np.ndarray, t: float, rotate_180: bool = ROTATE_180) -> Frame:
     """SDK の生データ（深度 mm・振幅）→ Frame（深度 m、向きを直し、弱い画素の深度は 0）。
 
     B0410 では confidence と amplitude が同じ値なので、両方に同じ振幅の配列を入れる（コピーしない。メモリ節約）。
@@ -34,7 +34,7 @@ def make_frame(depth_raw: np.ndarray, amplitude_raw: np.ndarray, t: float) -> Fr
     amplitude = np.asarray(amplitude_raw, dtype=np.float32)
     if depth.shape != (H, W) or amplitude.shape != (H, W):
         raise ValueError(f"画素数が {(H, W)} ではない: {depth.shape}, {amplitude.shape}")
-    if ROTATE_180:
+    if rotate_180:
         depth, amplitude = depth[::-1, ::-1], amplitude[::-1, ::-1]
     depth = np.where(amplitude >= MIN_AMPLITUDE, depth, 0).astype(np.float32)
     amplitude = np.ascontiguousarray(amplitude)

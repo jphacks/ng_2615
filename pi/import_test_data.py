@@ -47,7 +47,8 @@ def parse(text: str, fps: float) -> list[Frame]:
     frames = []
     for i, (s, e) in enumerate(zip(starts, starts[1:] + [len(text)])):
         block = text[s:e]
-        frames.append(make_frame(parse_array(block, "depth"), parse_array(block, "amplitude"), t=i / fps))
+        # test_data はセンサーを逆さまに付けて撮られているので、実機の設定によらず 180° 回す
+        frames.append(make_frame(parse_array(block, "depth"), parse_array(block, "amplitude"), t=i / fps, rotate_180=True))
     return frames
 
 

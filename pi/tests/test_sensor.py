@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from datatypes import H, W
-from sensor import Sensor
+from sensor import ROTATE_180, Sensor
 
 
 class FakeDepthData:
@@ -72,7 +72,7 @@ def install(monkeypatch):
 def test_read_converts_and_releases(install):
     depth = np.full((H, W), 1500.0, dtype=np.float32)
     amp = np.full((H, W), 100.0, dtype=np.float32)
-    amp[0, 0] = 5.0  # 弱い画素（180° 回すと右下）
+    amp[0, 0] = 5.0  # 弱い画素
     raw = FakeDepthData(depth, amp)
     sdk = install(fake_sdk([None, raw]))  # 1 回目は来ない、2 回目に来る
     s = Sensor()
@@ -81,7 +81,8 @@ def test_read_converts_and_releases(install):
     assert sdk.controls[0] == 4000  # Far モード
     assert f.depth.shape == (H, W) and f.depth.dtype == np.float32
     assert f.depth[10, 10] == pytest.approx(1.5)
-    assert f.depth[H - 1, W - 1] == 0
+    weak = (H - 1, W - 1) if ROTATE_180 else (0, 0)  # 向きの設定どおりの位置に来る
+    assert f.depth[weak] == 0
     assert sdk.released == [raw]
     depth[:] = 0  # SDK が配列を使い回しても、返した Frame は変わらない
     assert f.depth[10, 10] == pytest.approx(1.5)
