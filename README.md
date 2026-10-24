@@ -1,8 +1,6 @@
 # USHIROMI: 夜道の背後を見守る、第三の目
 
-[![IMAGE ALT TEXT HERE](https://jphacks.com/wp-content/uploads/2026/07/IMG_5316.png)](https://www.youtube.com/watch?v=piaNsc6ilBI)
-
-<!-- TODO: デモ動画ができたらサムネイルとリンクを差し替える -->
+[![USHIROMI デモ動画](https://img.youtube.com/vi/iDF9A-ZrNrY/maxresdefault.jpg)](https://youtu.be/iDF9A-ZrNrY)
 
 ## 製品概要
 
