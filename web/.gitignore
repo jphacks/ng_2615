@@ -1,0 +1,4 @@
+# pnpm / Vite
+node_modules/
+dist/
+*.local

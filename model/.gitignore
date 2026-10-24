@@ -1,0 +1,13 @@
+# uv / Python
+.venv/
+__pycache__/
+*.pyc
+
+# 評価に使う録画
+data/*
+!data/.gitkeep
+
+# 重み・書き出した ONNX
+outputs/
+*.pth
+*.onnx

@@ -1,0 +1,11 @@
+# uv / Python
+.venv/
+__pycache__/
+*.pyc
+
+# モデルの重み（train/ で作って、ここにコピーする）
+models/*
+!models/.gitkeep
+
+# 録画データ（record.py の出力）
+recordings/

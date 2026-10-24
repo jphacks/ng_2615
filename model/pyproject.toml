@@ -1,0 +1,13 @@
+[project]
+name = "ushiromi-model"
+version = "0.1.0"
+description = "USHIROMI: 学習済み検出モデルの ONNX 書き出しと評価（製品には含めない）"
+requires-python = ">=3.11"
+# 学習はしない（ラベル付きデータがないため）。学習済みモデルを書き出して試すだけ
+# PyTorch や YOLOX は、書き出すモデルが決まってから uv add で足す
+# Ultralytics など AGPL のものは使わない（仕様書 12章）
+dependencies = [
+    "numpy>=1.26",
+    "onnx>=1.16",
+    "onnxruntime>=1.18",
+]
