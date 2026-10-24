@@ -13,7 +13,8 @@ import import_test_data
 from datatypes import H, W
 from sensor import MIN_AMPLITUDE, make_frame
 
-MODEL = Path(__file__).resolve().parents[1] / "models" / "yolox_nano.onnx"
+MODELS = Path(__file__).resolve().parents[1] / "models"
+MODEL = MODELS / "yolox_nano_256x192.onnx"
 
 
 def test_make_frame_converts_units_rotation_and_weak_pixels():
@@ -43,14 +44,28 @@ def test_parse_test_data_format():
 
 def test_letterbox_keeps_aspect_and_pads():
     gray = np.full((H, W), 200, dtype=np.float32)
-    x, r = detect.letterbox(gray, 416)
+    x, r = detect.letterbox(gray, (416, 416))
     assert x.shape == (1, 3, 416, 416)
     assert r == pytest.approx(416 / W)
     assert x[0, 0, 0, 0] == 200 and x[0, 0, 415, 0] == detect.PAD_VALUE  # 下の余りは 114
 
 
+def test_letterbox_4_3_input_has_no_padding():
+    """256×192 はセンサーと同じ 4:3 なので、余白なしでぴったり入る。"""
+    x, r = detect.letterbox(np.full((H, W), 200, dtype=np.float32), (192, 256))
+    assert x.shape == (1, 3, 192, 256)
+    assert r == pytest.approx(256 / W)
+    assert (x == 200).all()
+
+
+def test_grid_for_non_square_input():
+    grid, stride = detect._grid((192, 256))
+    assert len(grid) == 24 * 32 + 12 * 16 + 6 * 8  # 1008（書き出したモデルの出力の数と同じ）
+    assert grid[:, 0].max() == 31 and grid[:, 1].max() == 23
+
+
 def test_decode_returns_person_boxes_in_sensor_pixels():
-    grid, stride = detect._grid(416)
+    grid, stride = detect._grid((416, 416))
     out = np.zeros((len(grid), 85), dtype=np.float32)
     out[:, 2:4] = -10  # 枠を小さく
     i = 52 * 10 + 20  # stride 8 のマス（x=20, y=10）。画像の端で枠が切れない位置
@@ -70,9 +85,11 @@ def test_nms_keeps_best_of_overlapping():
     assert detect.nms(boxes, np.array([0.5, 0.9, 0.7]), 0.45) == [1, 2]
 
 
-@pytest.mark.skipif(not MODEL.exists(), reason="YOLOX のモデルがない（pi/detect.py の先頭の手順で取れる）")
-def test_detector_runs_on_an_amplitude_image():
-    d = detect.Detector(MODEL)
-    assert d.size == 416
+@pytest.mark.parametrize("name, size", [("yolox_nano_256x192.onnx", (192, 256)), ("yolox_nano.onnx", (416, 416))])
+def test_detector_runs_on_an_amplitude_image(name, size):
+    if not (MODELS / name).exists():
+        pytest.skip(f"{name} がない（作り方は pi/detect.py の先頭）")
+    d = detect.Detector(MODELS / name)
+    assert d.size == size
     boxes = d.detect(np.random.default_rng(0).random((H, W), dtype=np.float32) * 20)
     assert isinstance(boxes, list)
