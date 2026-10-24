@@ -18,7 +18,7 @@ export function App() {
   const ttcs = approaching.map((p) => p.ttc).filter((t): t is number => t !== null);
   const minTtc = ttcs.length > 0 ? Math.min(...ttcs) : null;
 
-  useEffect(() => alarm.update(minTtc), [alarm, minTtc]);
+  useEffect(() => alarm.update(approaching), [alarm, approaching]);
   useEffect(() => () => alarm.disable(), [alarm]);
 
   const toggleSound = () => {

@@ -13,10 +13,11 @@ from datatypes import Box, Person
 DIST_WINDOW = 0.4    # 距離：前回の距離 ±この範囲の画素だけ使う [m]
 IOU_MIN = 0.3        # 追跡：同じ人とみなす枠の重なり
 DIST_MATCH = 1.0     # 追跡：同じ人とみなす距離の差 [m]
-MAX_AGE = 0.5        # 追跡：この秒数、検出されなければ消す
+MAX_AGE = 1.0        # 追跡：この秒数、検出されなければ消す（検出は 5fps なので、0.5 秒だと 2 回続けて見落とすだけで消えてしまう）
 SPEED_WINDOW = 0.5   # 接近速度：直近この秒数の距離に直線を当てはめる
-MIN_SPEED = 0.3      # 接近判定 [m/s]
-MAX_TTC = 3.0        # 接近判定 [s]
+MIN_SPEED = 0.1      # 接近判定：この速さ以上で近づいていて（0 にしないのは、測った速さのノイズで鳴ったり止まったりしないため）
+WARN_DIST = 3.5      # 接近判定：かつ、この距離以内 [m]
+MAX_TTC = 3.0        # 接近判定：または、この TTC 以下 [s]（遠くても速く迫る人）
 
 
 def iou(a: Box, b: Box) -> float:
@@ -49,6 +50,16 @@ def next_distance(depth: np.ndarray, box: Box, prev: float) -> float | None:
     pixels = _crop(depth, box)
     near = pixels[(pixels > 0) & (np.abs(pixels - prev) <= DIST_WINDOW)]
     return float(np.median(near)) if near.size else None
+
+
+def is_approaching(dist: float, speed: float, ttc: float | None) -> bool:
+    """接近判定：近づいていて（速さ ≥ 0.1 m/s）、3.5m 以内か TTC 3 秒以下。
+
+    3.5m 以内なら、ゆっくりでも近づいてくる人は全員知らせる。3.5m より遠くても、速く迫る人は TTC で知らせる。
+    """
+    if speed < MIN_SPEED:
+        return False
+    return dist <= WARN_DIST or (ttc is not None and ttc <= MAX_TTC)
 
 
 @dataclass
@@ -132,5 +143,5 @@ class Tracker:
             dist=tr.dist,
             speed=v,
             ttc=ttc,
-            approaching=v >= MIN_SPEED and ttc is not None and ttc <= MAX_TTC,
+            approaching=is_approaching(tr.dist, v, ttc),
         )

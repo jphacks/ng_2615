@@ -20,12 +20,23 @@ def test_frames_have_the_agreed_shape_and_type():
     assert ((f.depth == 0) | ((f.depth >= 0) & (f.depth <= 4.0))).all()
 
 
-def test_person_gets_closer_then_leaves():
-    """完了条件の流れ：ついてくる → 近づく → 遠ざかって消える。"""
-    assert scenario_distance(1.0) == scenario_distance(3.0)
-    assert scenario_distance(6.5) < scenario_distance(4.5)
-    assert scenario_distance(9.0) > scenario_distance(7.5)
-    assert scenario_distance(SCENARIO_LENGTH - 0.5) is None
+def test_scenario_has_various_speeds():
+    """ついてくる人と、いろいろな速さ（0.8・0.5・0.2・1.2・2.5 m/s）で近づく人が入っている。"""
+    d = scenario_distance
+    assert d(1.0) == d(3.0) == 3.8  # ついてくる
+    assert d(6.5) < d(4.5)
+    assert d(9.0) > d(7.5)  # 止まって遠ざかる
+    assert d(11.0) is None  # 見えなくなる
+
+    def speed(t0, t1):
+        return (d(t0) - d(t1)) / (t1 - t0)
+
+    assert abs(speed(4.5, 6.5) - 0.8) < 0.01
+    assert abs(speed(13.0, 15.0) - 0.5) < 0.01
+    assert abs(speed(23.0, 25.0) - 0.2) < 0.01
+    assert abs(speed(30.5, 31.5) - 1.2) < 0.01
+    assert abs(speed(37.2, 37.8) - 2.5) < 0.02
+    assert d(SCENARIO_LENGTH - 0.5) is None
 
 
 def test_box_grows_as_person_approaches():
