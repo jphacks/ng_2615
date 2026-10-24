@@ -28,7 +28,7 @@ MAX_MISSES = 5          # 続けてこの回数フレームが来なければ、
 def make_frame(depth_raw: np.ndarray, amplitude_raw: np.ndarray, t: float) -> Frame:
     """SDK の生データ（深度 mm・振幅）→ Frame（深度 m、向きを直し、弱い画素の深度は 0）。
 
-    B0410 では confidence と amplitude が同じ値なので、両方に振幅を入れる。
+    B0410 では confidence と amplitude が同じ値なので、両方に同じ振幅の配列を入れる（コピーしない。メモリ節約）。
     """
     depth = np.asarray(depth_raw, dtype=np.float32) * DEPTH_SCALE
     amplitude = np.asarray(amplitude_raw, dtype=np.float32)
@@ -38,7 +38,7 @@ def make_frame(depth_raw: np.ndarray, amplitude_raw: np.ndarray, t: float) -> Fr
         depth, amplitude = depth[::-1, ::-1], amplitude[::-1, ::-1]
     depth = np.where(amplitude >= MIN_AMPLITUDE, depth, 0).astype(np.float32)
     amplitude = np.ascontiguousarray(amplitude)
-    return Frame(depth=depth, confidence=amplitude.copy(), amplitude=amplitude, t=t)
+    return Frame(depth=depth, confidence=amplitude, amplitude=amplitude, t=t)
 
 
 class Sensor:

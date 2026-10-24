@@ -1,7 +1,7 @@
-"""もらった実データ（test_data.zip の test_data.json）を、録画形式（.npz）に変換する。
+"""もらった実データ（test_data.zip の test_data.json）を、録画形式（フォルダー。仕様書 11章）に変換する。
 
-  uv run import_test_data.py ../test_data.zip                 # → recordings/test_data.npz
-  uv run main.py --recording recordings/test_data.npz         # 再生して http://localhost:8000/ で見る
+  uv run import_test_data.py ../test_data.zip                 # → recordings/test_data/
+  uv run main.py --recording recordings/test_data             # 再生して http://localhost:8000/ で見る
 
 test_data.json は JSON ではなく、Python の辞書を表示した文字列（`1: {'depth': [[...]], ...}, 2: {...}`）。
 eval は使わず、フレームごとに切り出して数値だけを読む。
@@ -52,9 +52,9 @@ def parse(text: str, fps: float) -> list[Frame]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="test_data を録画形式（.npz）に変換する")
+    parser = argparse.ArgumentParser(description="test_data を録画形式（フォルダー）に変換する")
     parser.add_argument("src", type=Path, help="test_data.zip か test_data.json")
-    parser.add_argument("--out", type=Path, default=Path(__file__).parent / "recordings" / "test_data.npz")
+    parser.add_argument("--out", type=Path, default=Path(__file__).parent / "recordings" / "test_data")
     parser.add_argument("--fps", type=float, default=25.0, help="撮ったときの fps（データに時刻がないため）")
     args = parser.parse_args()
 

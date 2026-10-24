@@ -100,7 +100,7 @@ def build(args: argparse.Namespace):
 def main() -> None:
     parser = argparse.ArgumentParser(description="USHIROMI（Pi 側）")
     parser.add_argument("--fake", action="store_true", help="センサーなし（合成データ）")
-    parser.add_argument("--recording", type=Path, help="録画（.npz）を再生する")
+    parser.add_argument("--recording", type=Path, help="録画（record.py で撮ったフォルダー、または以前の .npz）を再生する")
     parser.add_argument("--detector", choices=["fake", "yolox"], help="既定：--fake なら fake、それ以外は yolox")
     parser.add_argument("--model", type=Path, default=Path(__file__).parent / "models" / "yolox_nano_256x192.onnx")
     parser.add_argument("--detect-fps", type=float, default=5.0, help="検出の上限 fps（偽の検出を本物の速さに近づける）")
