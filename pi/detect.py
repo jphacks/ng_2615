@@ -21,7 +21,7 @@ PERSON = 0          # COCO の person
 NMS_IOU = 0.45
 PAD_VALUE = 114
 STRIDES = (8, 16, 32)
-THREADS = 3         # Pi 4 は 4 コア。1 コアはスレッドA（25fps の取得・追跡・送信）とサーバーに残す
+THREADS = 3         # Pi 4 は 4 コア。1 コアはスレッドA（30fps の取得・追跡・送信）とサーバーに残す
 
 
 def to_gray(amplitude: np.ndarray) -> np.ndarray:
