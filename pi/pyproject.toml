@@ -1,0 +1,9 @@
+[project]
+name = "ushiromi-pi"
+version = "0.1.0"
+description = "USHIROMI: Raspberry Pi 側（取得・検出・追跡・配信）"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "onnxruntime>=1.18",
+]
