@@ -18,7 +18,7 @@ from datatypes import H, W, Frame
 
 # 実データ（test_data）で分かった、SDK の生データの癖（仕様書 11章「実データで分かったこと」）
 DEPTH_SCALE = 0.001     # 深度は mm で来る → m に直す
-ROTATE_180 = False      # 実機の今の付け方では正しい向きで来る。逆さまに付けたら True に（test_data は逆さまだった）
+ROTATE_180 = True       # 180° 回して表示する（チームで見比べて、こちらの向きに決めた。test_data も同じ）
 MIN_AMPLITUDE = 30.0    # 振幅がこれより弱い画素の深度はでたらめなので、測れない（0）にする（公式サンプルの初期値も 30）
 
 RANGE_MM = 4000         # Far モード（2000 か 4000）
