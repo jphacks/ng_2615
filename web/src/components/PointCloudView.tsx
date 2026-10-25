@@ -18,7 +18,7 @@ const MAX_PEOPLE = 4; // 円柱とラベルを先に作っておく数
 const RINGS = [1, 2, 3, 4]; // 自分を中心にした同心円 [m]
 const EYE = new THREE.Vector3(0, 2.4, 0.5); // 視点：自分の頭の上（後ろの範囲が画面いっぱいに入るように）
 const TARGET = new THREE.Vector3(0, 0.5, -2.3); // 見る先：背中越しに後ろ
-const BG = 0x060914;
+const BG = 0x070b17; // styles.css の .view-frame と同じ
 const BOX_BLEND = 0.6; // 円柱を前のフレームと混ぜる割合（大きいほど今のフレーム）
 const POINT_SIZE = VOXEL * 1.1; // 点の大きさ [m]。密度の上限の箱と同じくらいで、となりと少し触れる（重ねすぎると点群らしさがなくなる）
 
@@ -185,7 +185,7 @@ function createScene(host: HTMLDivElement): Scene {
   camera.lookAt(TARGET);
 
   // 地面：自分を中心にした薄い同心円
-  const ring = new THREE.LineBasicMaterial({ color: 0x26315e });
+  const ring = new THREE.LineBasicMaterial({ color: 0x3a4670 });
   for (const r of RINGS) scene.add(arc(r, 0, 2 * Math.PI, ring));
 
   // 点群（残った点を前に詰めて、その数だけ描く）
