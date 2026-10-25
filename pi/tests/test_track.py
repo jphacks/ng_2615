@@ -102,6 +102,20 @@ def test_constant_velocity_filter_finds_speed():
     assert abs(kf.v[0] + 1.0) < 0.2
 
 
+def test_brief_lunge_does_not_ring():
+    """腕を一瞬振ったくらい（0.3 秒で 20cm 近づいて戻る）では鳴らない。条件が 0.2 秒続いて初めて鳴る。"""
+    tracker = Tracker()
+    box = (100, 30, 40, 120)
+    rang = False
+    for k in range(120):
+        t = k / 30
+        u = (t - 2.0) / 0.3
+        z = 2.5 - 0.2 * (1 - abs(2 * u - 1)) if 0 <= u < 1 else 2.5
+        people = tracker.update(np.full((H, W), z, dtype=np.float32), [box] if k % 6 == 0 else None, t)
+        rang |= t > 1.0 and any(p.approaching for p in people)
+    assert not rang
+
+
 def test_only_detected_people_are_shown_and_ring():
     """検出されなくなった人は、0.5 秒で表示も警告も消える。2 秒以内にまた検出されたら同じ人としてつなぐ。"""
     tracker = Tracker()
