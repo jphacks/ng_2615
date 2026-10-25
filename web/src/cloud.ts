@@ -5,6 +5,8 @@
 //   3. ノイズを取る：まわりとつながらない点（浮いた点、輪郭のでたらめな距離）を消す。
 //      値はならさない（なめらかにしすぎると点群らしさがなくなるため）
 //   4. 時間でならす：前のフレームと近ければ混ぜる（ちらつきを抑える）
+//   5. 密度に上限を付ける：3D を一辺 VOXEL の箱に区切り、1 つの箱に点は 1 つだけ（近くの密集した点を間引く。
+//      近くても遠くても点の並びがだいたい同じ密度になり、密集した点が粒々に見えない）
 // 色は深度の色に、まわりの点から求めた面の向きで陰を付ける（立体に見えるように）。人の部分は明るく、接近中は赤く。
 
 import { CAM_HEIGHT, CX, CY, FX, FY, MIN_RADIUS, PERSON_WINDOW, TILT, type Cylinder } from "./geometry";
@@ -18,6 +20,7 @@ const JUMP = 0.12; // となりとこれ以上（＋距離の 3%）離れてい�
 const MIN_LINKS = 3; // まわり 8 点のうち、つながっている点がこれより少なければ消す
 const BLEND = 0.5; // 前のフレームとの混ぜ具合（大きいほど今のフレーム）
 const LIGHT = normalize([0.35, 0.8, 0.5]); // 陰を付ける光の向き
+export const VOXEL = 0.04; // 密度の上限：一辺 4cm の箱に点は 1 つ（面なら 1m² あたり約 625 点まで）[m]
 const MIN_PERSON_POINTS = 15; // 人の点がこれより少なければ、点群から円柱を作らない
 const LOW = 0.05; // 円柱は、人の点の 5〜95% の範囲（はみ出した点に引っぱられないように）
 const HIGH = 0.95;
@@ -101,6 +104,7 @@ export class CloudBuilder {
   private prev: Float32Array = new Float32Array(GW * GH);
   private pos = new Float32Array(GW * GH * 3);
   private rgb = new Float32Array(GW * GH * 3);
+  private used = new Set<number>(); // 点を置いた箱
 
   // 残った点を positions・colors（GW×GH×3 あれば足りる）の前に詰めて書き込み、点の数を返す
   build(depth: Uint8Array, people: Person[], lut: Uint8ClampedArray, positions: Float32Array, colors: Float32Array): number {
@@ -120,8 +124,16 @@ export class CloudBuilder {
     this.color(z, people, lut, pos, this.rgb);
 
     let n = 0;
+    this.used.clear();
     for (let k = 0; k < z.length; k++) {
       if (z[k] === 0) continue;
+      // 箱の番号（x は ±4m、y は 0〜3m、z は -4〜0m に収まるので、1 つの数にまとめる）
+      const box =
+        (Math.floor(pos[k * 3] / VOXEL) + 512) * 1048576 +
+        (Math.floor(pos[k * 3 + 1] / VOXEL) + 512) * 1024 +
+        (Math.floor(pos[k * 3 + 2] / VOXEL) + 512);
+      if (this.used.has(box)) continue;
+      this.used.add(box);
       positions.set(pos.subarray(k * 3, k * 3 + 3), n * 3);
       colors.set(this.rgb.subarray(k * 3, k * 3 + 3), n * 3);
       n++;

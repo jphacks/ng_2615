@@ -3,7 +3,8 @@
 // 地面には自分を中心に 1〜4m の薄い同心円（距離感が分かるように）。人は円柱で囲み、足元の円も描く。
 // 円柱は、人の点群の広がりに合わせる（点が少なければ YOLO の枠から作る）。震えないように、前のフレームと混ぜる。
 // 視点は固定（回さない）。描くのはフレームが届いたときだけなので軽く、発表でも誰が見ても同じ見え方になる。
-// 深度はノイズを取って間引き、丸い点の点群で描く（cloud.ts）。
+// 深度はノイズを取って間引き、密度に上限を付けて（一辺 4cm の箱に 1 点）、縁をぼかした点で描く（cloud.ts）。
+// 点群らしさは残しつつ、近くで密集した点が粒々（集合体）に見えないようにする。点の数に上限があるので、近づいても重くならない。
 // three.js の場面は一度だけ作り、点と円柱の位置だけを毎フレーム書き換える。
 
 import { useEffect, useRef } from "react";
@@ -11,7 +12,7 @@ import * as THREE from "three";
 import { DANGER, DEPTH_LUT, SAFE } from "../colors";
 import { personCylinder, type Cylinder } from "../geometry";
 import type { FrameMessage } from "../protocol";
-import { CloudBuilder, GH, GW } from "../cloud";
+import { CloudBuilder, GH, GW, VOXEL } from "../cloud";
 
 const MAX_PEOPLE = 4; // 円柱とラベルを先に作っておく数
 const RINGS = [1, 2, 3, 4]; // 自分を中心にした同心円 [m]
@@ -19,7 +20,7 @@ const EYE = new THREE.Vector3(0, 2.4, 0.5); // 視点：自分の頭の上（後
 const TARGET = new THREE.Vector3(0, 0.5, -2.3); // 見る先：背中越しに後ろ
 const BG = 0x060914;
 const BOX_BLEND = 0.35; // 円柱を前のフレームと混ぜる割合（大きいほど今のフレーム）
-const MAX_POINT_PX = 6; // 点の大きさの上限 [画面の px]。近い点が大きくなりすぎると、重なって描くのが重くなるため
+const POINT_SIZE = VOXEL * 1.1; // 点の大きさ [m]。密度の上限の箱と同じくらいで、となりと少し触れる（重ねすぎると点群らしさがなくなる）
 
 interface Scene {
   renderer: THREE.WebGLRenderer;
@@ -187,15 +188,12 @@ function createScene(host: HTMLDivElement): Scene {
   const ring = new THREE.LineBasicMaterial({ color: 0x26315e });
   for (const r of RINGS) scene.add(arc(r, 0, 2 * Math.PI, ring));
 
-  // 点群（残った点を前に詰めて、その数だけ描く）。点は丸く（四角い点より点群らしく、やわらかく見える）
+  // 点群（残った点を前に詰めて、その数だけ描く）
   const cloud = new THREE.BufferGeometry();
   cloud.setAttribute("position", new THREE.BufferAttribute(new Float32Array(GW * GH * 3), 3).setUsage(THREE.DynamicDrawUsage));
   cloud.setAttribute("color", new THREE.BufferAttribute(new Float32Array(GW * GH * 3), 3).setUsage(THREE.DynamicDrawUsage));
   cloud.setDrawRange(0, 0);
-  const points = new THREE.Points(
-    cloud,
-    pointMaterial(),
-  );
+  const points = new THREE.Points(cloud, pointMaterial());
   points.frustumCulled = false; // 点の位置が毎フレーム変わるので、見えない判定をしない
   scene.add(points);
 
@@ -206,7 +204,7 @@ function createScene(host: HTMLDivElement): Scene {
   const boxes = Array.from({ length: MAX_PEOPLE }, () => {
     const edges = new THREE.LineSegments(edgesGeometry, new THREE.LineBasicMaterial({ color: SAFE }));
     const fill = new THREE.Mesh(unit, new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide }));
-    const foot = new THREE.Mesh(footGeometry, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.35, depthWrite: false }));
+    const foot = new THREE.Mesh(footGeometry, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.15, depthWrite: false }));
     edges.visible = fill.visible = foot.visible = false;
     scene.add(foot, fill, edges);
     return { edges, fill, foot };
@@ -215,26 +213,26 @@ function createScene(host: HTMLDivElement): Scene {
   return { renderer, scene, camera, cloud, builder: new CloudBuilder(), smoothed: new Map(), boxes };
 }
 
-// 丸い点。大きさは 3D の中で 3cm だが、画面の上で MAX_POINT_PX を超えないようにする（近くの点が大きくなりすぎて重くならないように）
+// ぼかした点。大きさは 3D の中で POINT_SIZE。重ねて描くので、奥行きの書き込みはしない
 function pointMaterial(): THREE.PointsMaterial {
-  const material = new THREE.PointsMaterial({ size: 0.03, vertexColors: true, map: dotTexture(), alphaTest: 0.5 });
-  const maxPx = MAX_POINT_PX * Math.min(window.devicePixelRatio || 1, 2);
-  material.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace(
-      "#include <fog_vertex>",
-      `#include <fog_vertex>\n  gl_PointSize = min(gl_PointSize, ${maxPx.toFixed(1)});`,
-    );
-  };
-  return material;
+  return new THREE.PointsMaterial({
+    size: POINT_SIZE,
+    vertexColors: true,
+    map: dotTexture(),
+    transparent: true,
+    depthWrite: false,
+  });
 }
 
-// 丸い点の形（白い円）
+// 点の形：中は同じ明るさで、縁だけふわっと透明になる円（縁をくっきりさせず、泡のような立体感も付けない）
 function dotTexture(): THREE.Texture {
   const canvas = Object.assign(document.createElement("canvas"), { width: 64, height: 64 });
   const ctx = canvas.getContext("2d")!;
-  ctx.fillStyle = "#fff";
-  ctx.beginPath();
-  ctx.arc(32, 32, 30, 0, 2 * Math.PI);
-  ctx.fill();
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, "rgba(255, 255, 255, 1)");
+  g.addColorStop(0.6, "rgba(255, 255, 255, 1)");
+  g.addColorStop(1, "rgba(255, 255, 255, 0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
   return new THREE.CanvasTexture(canvas);
 }
