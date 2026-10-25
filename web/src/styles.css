@@ -1,15 +1,18 @@
 /* 会場で Pi がインターネットにつながらなくても崩れないように、外部フォントは使わない */
 
+/* 色はロゴ（assets/logo/）に合わせる：紺の背景、クリーム色の文字、アンバーの差し色。
+   暗い所で見るので、背景は暗いままにして（まぶしくない）、文字とパネルのコントラストを高くする */
 :root {
-  --bg: #060914;
-  --panel: #0e1428;
-  --panel-2: #141c36;
-  --line: #222c4d;
-  --text: #e8f0ff;
-  --muted: #8a96b8;
+  --bg: #0b1020;
+  --panel: #141a2e;
+  --panel-2: #1c2440;
+  --line: #2e3858;
+  --text: #f2f0e9;
+  --muted: #b9bccb;
   --safe: #3ddc97;
-  --danger: #ff3b4e;
-  --accent: #5b8cff;
+  --danger: #ff4d5e;
+  --accent: #ffb547;
+  --on-accent: #1a1406; /* アンバーの上の文字 */
   --radius: 14px;
   color-scheme: dark;
 }
@@ -36,7 +39,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100%;
-  background: radial-gradient(1200px 600px at 30% -10%, #12204a 0%, transparent 60%), var(--bg);
+  background: radial-gradient(1200px 600px at 30% -10%, #1a2344 0%, transparent 60%), var(--bg);
   transition: box-shadow 0.2s;
 }
 
@@ -67,15 +70,15 @@ body {
 
 .brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   min-width: 0;
 }
 
-.brand-name {
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: 0.14em;
+.brand-logo {
+  display: block;
+  height: 34px;
+  width: auto;
 }
 
 .brand-sub {
@@ -139,6 +142,8 @@ body {
 .button-on {
   background: var(--accent);
   border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
 }
 
 /* 警告の帯（深度ビューの上端に重ねる） */
@@ -184,7 +189,7 @@ body {
 }
 
 .card {
-  background: linear-gradient(180deg, var(--panel) 0%, #0b1022 100%);
+  background: linear-gradient(180deg, var(--panel-2) 0%, var(--panel) 100%);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 16px;
@@ -237,7 +242,7 @@ body {
   margin: 0 auto;
   border-radius: 10px;
   overflow: hidden;
-  background: #0a0e28;
+  background: #070b17;
 }
 
 /* Canvas は枠に重ねて置く（Canvas の画素数がレイアウトに影響しないように） */
@@ -246,6 +251,78 @@ body {
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+/* 2D / 3D の切り替え */
+.view-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.view-title .label {
+  margin: 0;
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+
+.segmented button {
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.segmented .segmented-on {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* 3D 点群ビュー */
+.cloud-host {
+  position: absolute;
+  inset: 0;
+}
+
+.cloud-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.cloud-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.cloud-label {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 6px));
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(8, 12, 32, 0.78);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cloud-label-danger {
+  background: rgba(255, 59, 78, 0.92);
+  color: #fff;
 }
 
 /* 右側の欄 */
