@@ -15,7 +15,7 @@ export function App() {
   const { frame, source, receivedFps } = useFrameStream();
   const alarm = useMemo(() => new Alarm(), []);
   const [soundOn, setSoundOn] = useState(false);
-  const [mode, setMode] = useState<"2d" | "3d">("2d");
+  const [mode, setMode] = useState<"2d" | "3d">("3d");
 
   const approaching = frame?.people.filter((p) => p.approaching) ?? [];
   const warning = approaching.length > 0;
