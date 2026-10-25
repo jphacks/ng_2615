@@ -4,7 +4,8 @@
 - 枠：YOLO の最新の枠をそのまま使う（次の検出まで置いておく）。実データで、枠をカルマンフィルタで先読み・
   ならすより、そのまま使うほうが次の検出とのずれが小さかった（6.6px と 7〜15px）
 - 距離：毎フレーム測れるので、等速モデルのカルマンフィルタ 1 つでならし、速さもそこから出す（#20）
-- 人として出すのは、MIN_HITS 回続けて検出されてから（YOLO が 1 回だけ間違えて出した枠を拾わない）
+- YOLO で検出された人は、いつも表示する。カルマンフィルタの追跡対象（速さを出して警告を判定する）にするのは、
+  MIN_HITS 回続けて検出されてから（YOLO が一瞬だけ間違えて出した枠で鳴らないように）。それまでに見落としたら捨てる
 - 表示と警告は、いま検出されている人（SHOW_AGE 以内）だけ。見えなくなった人も距離の予測は続け
   （不確かさが大きくなっていく）、その分だけ広く探して、また検出されたら同じ人としてつなぐ
 """
@@ -19,7 +20,7 @@ DIST_WINDOW = 0.4    # 距離：予測した距離 ±（これ＋予測の不確
 # 追跡はゆるくつなぐ。同時に映るのはほぼ 1 人なので、同じ人を別人にしてしまうほうが困る
 DIST_MATCH = 1.5     # 追跡：同じ人とみなす距離の差 [m]（＋予測の不確かさの 3 倍）
 CENTER_MATCH = 1.0   # 追跡：枠が重ならなくても、中心のずれが枠の大きさのこの倍以内なら同じ人とみなす
-MIN_HITS = 2         # 追跡：この回数続けて検出されたら人として出す。それまでに見落としたら捨てる
+MIN_HITS = 3         # 追跡：この回数続けて検出されたら追跡対象にする（速さと警告を出す）。それまでに見落としたら捨てる
 SHOW_AGE = 0.5       # 表示と警告：最後に検出されてからこの秒数以内の人だけ（検出は 5fps なので、1 回見落とすまでは出し続ける）
 MAX_AGE = 1.0        # 追跡：この秒数、検出されなければ忘れる。それまでは表示も警告もしないが、また検出されたら同じ人としてつなぐ
                      # （長くすると、いなくなったあとに来た別の人までつないでしまう）
@@ -116,11 +117,16 @@ class Track:
     dist_kf: ConstantVelocity                 # 距離
     t: float                                  # フィルタを進めた時刻
     last_seen: float                          # 最後に検出と対応付いた時刻
-    hits: int = 1                             # 検出と対応付いた回数（MIN_HITS までは候補）
+    hits: int = 1                             # 検出と対応付いた回数（MIN_HITS までは候補で、速さも警告も出さない）
 
     def visible(self, t: float) -> bool:
-        """人として出す（表示と警告の対象）：MIN_HITS 回続けて検出されていて、いま検出されている。"""
-        return self.hits >= MIN_HITS and t - self.last_seen <= SHOW_AGE
+        """いま検出されている（表示する）。"""
+        return t - self.last_seen <= SHOW_AGE
+
+    @property
+    def confirmed(self) -> bool:
+        """カルマンフィルタの追跡対象（MIN_HITS 回続けて検出された）。速さと警告はこの人だけ。"""
+        return self.hits >= MIN_HITS
 
     @classmethod
     def start(cls, id: int, box: Box, dist: float, t: float) -> "Track":
@@ -141,8 +147,8 @@ class Track:
         return float(np.sqrt(self.dist_kf.pxx))
 
     def speed(self) -> float:
-        """距離フィルタの速さ。近づくと正。まだ定まっていなければ 0。"""
-        if np.sqrt(self.dist_kf.pvv) > SPEED_SURE:
+        """距離フィルタの速さ。近づくと正。追跡対象でない、またはまだ定まっていなければ 0。"""
+        if not self.confirmed or np.sqrt(self.dist_kf.pvv) > SPEED_SURE:
             return 0.0
         return -self.dist_kf.v
 
@@ -210,14 +216,14 @@ class Tracker:
             used_boxes.add(i)
             used_tracks.add(j)
             tr = self.tracks[j]
-            if not tr.visible(t) and box_dist[i] is not None:
-                tr.measure_dist(box_dist[i])  # しばらく見えていなかったので、予測は古い。検出の距離ですぐ戻す
+            if (not tr.visible(t) or not tr.confirmed) and box_dist[i] is not None:
+                tr.measure_dist(box_dist[i])  # 候補か、しばらく見えていなかった人。予測は当てにならないので、検出の距離で測る
             tr.box = boxes[i]
             tr.hits += 1
             tr.last_seen = t
 
         # まだ候補（MIN_HITS 回に届いていない）のまま見落とした人は捨てる
-        self.tracks = [tr for j, tr in enumerate(self.tracks) if j in used_tracks or tr.hits >= MIN_HITS]
+        self.tracks = [tr for j, tr in enumerate(self.tracks) if j in used_tracks or tr.confirmed]
 
         for i, b in enumerate(boxes):
             if i in used_boxes or box_dist[i] is None:

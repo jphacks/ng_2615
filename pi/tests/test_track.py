@@ -83,15 +83,22 @@ def test_same_id_even_if_box_jumps():
     assert [p.id for p in a] == [p.id for p in b] == [1]
 
 
-def test_shown_after_two_detections_in_a_row():
-    """1 回だけの検出（YOLO の間違い）は人として出さない。2 回続けて検出されたら出す。"""
-    depth = np.full((H, W), 2.0, dtype=np.float32)
+def test_tracked_after_three_detections_in_a_row():
+    """YOLO の検出はいつも表示する。速さと警告を出す追跡対象になるのは、3 回続けて検出されてから。"""
     tracker = Tracker()
-    assert tracker.update(depth, [(100, 40, 30, 80)], 0.0) == []
-    assert tracker.update(depth, [], 0.2) == []  # 次の検出でいなかった → 捨てる
+    box = (100, 40, 30, 80)
+    depth = lambda z: np.full((H, W), z, dtype=np.float32)
+    first = tracker.update(depth(3.0), [box], 0.0)
+    assert [p.id for p in first] == [1] and first[0].speed == 0 and not first[0].approaching  # 表示はする
+    assert tracker.update(depth(3.0), [], 0.2) == []  # 3 回そろう前に見落とした → 捨てる
     assert tracker.tracks == []
-    tracker.update(depth, [(100, 40, 30, 80)], 0.4)
-    assert [p.id for p in tracker.update(depth, [(101, 40, 30, 80)], 0.6)] == [2]
+    for k in range(12):  # 1 m/s で近づく人
+        t = 0.4 + k / 30
+        people = tracker.update(depth(3.0 - (t - 0.4)), [box] if k % 6 == 0 else None, t)
+        assert all(not p.approaching for p in people)  # 2 回しか検出されていない（候補）うちは鳴らない
+    assert tracker.tracks[0].hits == 2 and not tracker.tracks[0].confirmed
+    tracker.update(depth(2.6), [box], 0.8)
+    assert tracker.tracks[0].confirmed
 
 
 def test_box_is_the_latest_detection():
