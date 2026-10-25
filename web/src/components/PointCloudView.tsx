@@ -1,20 +1,22 @@
 // 3D 点群ビュー（仕様書 6章、#22）。
-// 自分（装着者）を中心にしたレーダーのような画面。自分の頭の少し前・上から、背中越しに後ろを見下ろす。
+// 自分（装着者）を中心にしたレーダーのような画面。自分の頭の上から、背中越しに後ろを見下ろす。
 // 地面には自分を中心に 1〜4m の輪、センサーの視野（扇形）、警告が始まる 3.5m の線。人は 3D の直方体で囲み、足元も描く。
 // 視点は固定（回さない）。描くのはフレームが届いたときだけなので軽く、発表でも誰が見ても同じ見え方になる。
-// three.js の場面は一度だけ作り、点と直方体の位置だけを毎フレーム書き換える。
+// 深度はノイズを取って間引き、つながった面にして描く（surface.ts）。
+// three.js の場面は一度だけ作り、面と直方体の位置だけを毎フレーム書き換える。
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { DANGER, DEPTH_LUT, SAFE } from "../colors";
-import { HALF_FOV, fillCloud, personCuboid } from "../geometry";
-import { H, W, Z_MAX, type FrameMessage } from "../protocol";
+import { HALF_FOV, personCuboid } from "../geometry";
+import { Z_MAX, type FrameMessage } from "../protocol";
+import { GH, GW, SurfaceBuilder } from "../surface";
 
 const MAX_PEOPLE = 4; // 直方体とラベルを先に作っておく数
 const RINGS = [1, 2, 3, 4]; // 自分を中心にした輪 [m]
 const WARN_DIST = 3.5; // 警告が始まる距離 [m]（pi/track.py と同じ）
-const EYE = new THREE.Vector3(0, 2.9, 2.3); // 視点：自分の少し前・上（自分が画面の下に入るように）
-const TARGET = new THREE.Vector3(0, 0.4, -1.7); // 見る先：背中越しに後ろの地面
+const EYE = new THREE.Vector3(0, 2.4, 0.5); // 視点：自分の頭の上（後ろの範囲が画面いっぱいに入るように）
+const TARGET = new THREE.Vector3(0, 0.5, -2.3); // 見る先：背中越しに後ろ
 const BG = 0x060914;
 const ACCENT = 0x5b8cff;
 
@@ -22,7 +24,8 @@ interface Scene {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
-  cloud: THREE.BufferGeometry;
+  surface: THREE.BufferGeometry;
+  builder: SurfaceBuilder;
   boxes: { edges: THREE.LineSegments; fill: THREE.Mesh; foot: THREE.Mesh }[];
 }
 
@@ -50,7 +53,6 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
         const a = HALF_FOV + 0.05; // 視野の扇形の右外（点群に重ならないように）
         place(ringLabels.children[k] as HTMLElement, new THREE.Vector3(r * Math.sin(a), 0, -r * Math.cos(a)), s.camera, host);
       });
-      place(ringLabels.children[RINGS.length] as HTMLElement, new THREE.Vector3(0, 0, 0.2), s.camera, host);
       s.renderer.render(s.scene, s.camera);
     };
     resize();
@@ -77,12 +79,21 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
     const labels = labelsRef.current;
     if (!s || !host || !labels || !frame) return;
 
-    const positions = s.cloud.getAttribute("position") as THREE.BufferAttribute;
-    const colors = s.cloud.getAttribute("color") as THREE.BufferAttribute;
-    const n = fillCloud(frame.depth, frame.people, DEPTH_LUT, positions.array as Float32Array, colors.array as Float32Array);
-    s.cloud.setDrawRange(0, n);
+    const positions = s.surface.getAttribute("position") as THREE.BufferAttribute;
+    const colors = s.surface.getAttribute("color") as THREE.BufferAttribute;
+    const index = s.surface.getIndex()!;
+    const n = s.builder.build(
+      frame.depth,
+      frame.people,
+      DEPTH_LUT,
+      positions.array as Float32Array,
+      colors.array as Float32Array,
+      index.array as Uint32Array,
+    );
+    s.surface.setDrawRange(0, n);
     positions.needsUpdate = true;
     colors.needsUpdate = true;
+    index.needsUpdate = true;
 
     s.boxes.forEach((b, k) => {
       const p = frame.people[k];
@@ -124,7 +135,6 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
             {r} m
           </div>
         ))}
-        <div className="cloud-self-label">あなた</div>
       </div>
       <div ref={labelsRef} className="cloud-labels">
         {Array.from({ length: MAX_PEOPLE }, (_, k) => (
@@ -198,23 +208,15 @@ function createScene(host: HTMLDivElement): Scene {
     scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.004, 0), end]), bright));
   }
 
-  // 自分：足元の円
-  const self = new THREE.Mesh(
-    new THREE.CircleGeometry(0.14, 32).rotateX(-Math.PI / 2),
-    new THREE.MeshBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.9 }),
-  );
-  self.position.y = 0.006;
-  scene.add(self);
-  scene.add(arc(0.24, 0, 2 * Math.PI, new THREE.LineBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.5 })));
-
-  // 点群（測れた画素だけを前に詰めて、その数だけ描く）
-  const cloud = new THREE.BufferGeometry();
-  cloud.setAttribute("position", new THREE.BufferAttribute(new Float32Array(W * H * 3), 3).setUsage(THREE.DynamicDrawUsage));
-  cloud.setAttribute("color", new THREE.BufferAttribute(new Float32Array(W * H * 3), 3).setUsage(THREE.DynamicDrawUsage));
-  cloud.setDrawRange(0, 0);
-  const points = new THREE.Points(cloud, new THREE.PointsMaterial({ size: 0.024, vertexColors: true }));
-  points.frustumCulled = false; // 点の位置が毎フレーム変わるので、見えない判定をしない
-  scene.add(points);
+  // 深度の面（間引いた格子の点を、つながるところだけ三角形で結ぶ。三角形の数は毎フレーム変わる）
+  const surface = new THREE.BufferGeometry();
+  surface.setAttribute("position", new THREE.BufferAttribute(new Float32Array(GW * GH * 3), 3).setUsage(THREE.DynamicDrawUsage));
+  surface.setAttribute("color", new THREE.BufferAttribute(new Float32Array(GW * GH * 3), 3).setUsage(THREE.DynamicDrawUsage));
+  surface.setIndex(new THREE.BufferAttribute(new Uint32Array((GW - 1) * (GH - 1) * 6), 1).setUsage(THREE.DynamicDrawUsage));
+  surface.setDrawRange(0, 0);
+  const mesh = new THREE.Mesh(surface, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+  mesh.frustumCulled = false; // 形が毎フレーム変わるので、見えない判定をしない
+  scene.add(mesh);
 
   // 人を囲む直方体（大きさ 1 の箱を、位置と大きさで合わせる）と、足元の長方形
   const unit = new THREE.BoxGeometry(1, 1, 1);
@@ -229,5 +231,5 @@ function createScene(host: HTMLDivElement): Scene {
     return { edges, fill, foot };
   });
 
-  return { renderer, scene, camera, cloud, boxes };
+  return { renderer, scene, camera, surface, builder: new SurfaceBuilder(), boxes };
 }

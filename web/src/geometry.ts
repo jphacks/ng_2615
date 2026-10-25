@@ -5,7 +5,7 @@
 // 3D の座標（three.js に合わせる）：x は右、y は上（地面が 0）、センサーが向いている先（後ろ）が -z。
 // 見る人はセンサーの後ろから、センサーと同じ向きを見る（2D の深度ビューと左右が同じになる）。
 
-import { H, W, u8ToMeters, type Person } from "./protocol";
+import { H, W, type Person } from "./protocol";
 
 export const FX = 171; // 焦点距離 [px]（水平の視野 約 70°。pi/fake_sensor.py・demo.ts と同じ）
 export const FY = 171;
@@ -47,35 +47,6 @@ export function rangeToWall(i: number, z: number): number {
   return z / -RAY_Z[i];
 }
 
-// 測れた画素を 3D の点にして positions に詰める。戻り値は点の数。
-// colors には、深度の色 lut（256 色 × RGBA、0〜255）を 0〜1 にして入れる。人の部分は明るく、接近中は赤く。
-export function fillCloud(
-  depth: Uint8Array,
-  people: Person[],
-  lut: Uint8ClampedArray,
-  positions: Float32Array,
-  colors: Float32Array,
-): number {
-  const tint = new Float32Array(W * H * 4); // 人の部分の色を混ぜる [r, g, b, 割合]
-  for (const p of people) {
-    forEachPersonPixel(depth, p, (i) => {
-      tint.set(p.approaching ? [1, 0.23, 0.31, 0.75] : [1, 1, 1, 0.5], i * 4);
-    });
-  }
-  let n = 0;
-  for (let i = 0; i < depth.length; i++) {
-    const r = u8ToMeters(depth[i]);
-    if (r === null) continue;
-    positions[n * 3] = RAY_X[i] * r;
-    positions[n * 3 + 1] = CAM_HEIGHT + RAY_Y[i] * r;
-    positions[n * 3 + 2] = RAY_Z[i] * r;
-    const m = tint[i * 4 + 3];
-    for (let k = 0; k < 3; k++) colors[n * 3 + k] = (lut[depth[i] * 4 + k] / 255) * (1 - m) + tint[i * 4 + k] * m;
-    n++;
-  }
-  return n;
-}
-
 export interface Cuboid {
   min: [number, number, number];
   max: [number, number, number];
@@ -84,8 +55,8 @@ export interface Cuboid {
 export const BODY_DEPTH = 0.4; // 人の体の厚み [m]（直方体の奥行き）
 
 // 人を囲む直方体（地面に沿った向き）。人が立っている前提で、YOLO の枠と人の距離だけから作る。
-// 幅・高さは枠の端を人の距離のところで 3D に直した大きさ。手前の面が人の距離で、奥へ体の厚みだけ伸ばす（底面は長方形）。
-// 枠の下が画面の下で切れているとき（足が写っていない）は、地面まで伸ばす。
+// 幅と上の面は、枠の端を人の距離のところで 3D に直した位置。手前の面が人の距離で、奥へ体の厚みだけ伸ばす（底面は長方形）。
+// 下の面はいつも地面。足元は胴より遠いので、枠の下端を人の距離で 3D に直すと地面より上になり、箱が浮いて見えるため。
 export function personCuboid(p: Person): Cuboid {
   const [bx, by, bw, bh] = p.box;
   const col = (x: number) => Math.min(W - 1, Math.max(0, Math.round(x)));
@@ -95,22 +66,9 @@ export function personCuboid(p: Person): Cuboid {
   const left = pointAt(midRow * W + col(bx), p.dist);
   const right = pointAt(midRow * W + col(bx + bw - 1), p.dist);
   const top = pointAt(row(by) * W + midCol, p.dist);
-  const bottom = pointAt(row(by + bh - 1) * W + midCol, p.dist);
   const front = pointAt(midRow * W + midCol, p.dist)[2];
-  const ground = by + bh >= H - 1 ? 0 : Math.max(0, bottom[1]);
   return {
-    min: [left[0], ground, front - BODY_DEPTH],
-    max: [right[0], Math.max(top[1], ground + 0.1), front],
+    min: [left[0], 0, front - BODY_DEPTH],
+    max: [right[0], Math.max(top[1], 0.1), front],
   };
-}
-
-function forEachPersonPixel(depth: Uint8Array, p: Person, visit: (i: number, r: number) => void) {
-  const [bx, by, bw, bh] = p.box;
-  for (let y = Math.max(0, by); y < Math.min(H, by + bh); y++) {
-    for (let x = Math.max(0, bx); x < Math.min(W, bx + bw); x++) {
-      const i = y * W + x;
-      const r = u8ToMeters(depth[i]);
-      if (r !== null && Math.abs(r - p.dist) <= PERSON_WINDOW) visit(i, r);
-    }
-  }
 }
