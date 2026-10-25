@@ -1,0 +1,20 @@
+[project]
+name = "ushiromi-pi"
+version = "0.1.0"
+description = "USHIROMI: Raspberry Pi 側（取得・検出・追跡・配信）"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.14.5",
+    "arducamdepthcamera>=0.1.24",
+    "numpy>=1.26,<2", # ArducamDepthCamera が numpy 2 未満を求める
+    "onnxruntime>=1.18",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

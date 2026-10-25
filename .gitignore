@@ -1,0 +1,16 @@
+# リポジトリ全体に共通するもの
+# pi/ web/ それぞれのツールが作るものは、各フォルダーの .gitignore に書く
+
+# OS
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+
+# エディタ
+.vscode/
+.idea/
+*.swp
+
+# 環境変数・秘密情報
+.env
+.env.*
