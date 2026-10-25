@@ -2,7 +2,7 @@ import numpy as np
 
 from datatypes import H, W
 from fake_sensor import FakeDetector, FakeSensor
-from track import Tracker, iou, is_approaching
+from track import ConstantVelocity, Tracker, iou, is_approaching
 
 
 def run_scenario(seconds: float, detect_every: int = 5):
@@ -71,6 +71,35 @@ def test_same_id_while_following():
     r = run_scenario(4.0)
     ids = {p.id for t, people in r.items() if t >= 0.5 for p in people}
     assert ids == {1}
+
+
+def test_same_id_even_if_box_jumps():
+    """枠が重ならないほど跳ねても、中心が近く距離も同じなら同じ人のまま（ほぼ 1 人しか映らないので、ゆるくつなぐ）。"""
+    depth = np.full((H, W), 2.0, dtype=np.float32)
+    tracker = Tracker()
+    a = tracker.update(depth, [(100, 40, 30, 80)], 0.0)
+    b = tracker.update(depth, [(135, 40, 30, 80)], 0.2)
+    assert [p.id for p in a] == [p.id for p in b] == [1]
+
+
+def test_box_moves_between_detections():
+    """検出のあいだのフレームでも、枠は人の動きに合わせて先読みで動く。"""
+    depth = np.full((H, W), 2.0, dtype=np.float32)
+    tracker = Tracker()
+    for k in range(10):  # 右へ 50 px/s
+        tracker.update(depth, [(100 + 10 * k, 40, 30, 80)], 0.2 * k)
+    x0 = tracker.update(depth, None, 1.9)[0].box[0]
+    x1 = tracker.update(depth, None, 2.0)[0].box[0]
+    assert x1 > x0
+
+
+def test_constant_velocity_filter_finds_speed():
+    rng = np.random.default_rng(0)
+    kf = ConstantVelocity([3.0], noise=0.05, accel=2.0, speed_spread=1.0)
+    for k in range(1, 31):  # 1.0 m/s で近づく、30fps、ノイズ 5cm
+        kf.predict(1 / 30)
+        kf.update([3.0 - k / 30 + rng.normal(0, 0.05)])
+    assert abs(kf.v[0] + 1.0) < 0.2
 
 
 def test_person_is_removed_after_disappearing():

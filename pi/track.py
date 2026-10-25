@@ -1,20 +1,27 @@
 """距離・追跡・接近速度・TTC・接近判定（仕様書 M3〜M5、5章）。
 
-walking skeleton 用の素直な実装。しきい値の調整やカルマンフィルタは、録画を使って #11・#12・#20 で行う。
+距離と枠は、人の動きを想定した等速モデルのカルマンフィルタでならす（#20）。
+距離は毎フレーム測れるので、速さもそのフィルタから出す。枠は検出（5fps）のときだけ測れるので、
+あいだのフレームは動きを先読みして枠を動かす。
 """
 
-from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
 from datatypes import Box, Person
 
 DIST_WINDOW = 0.4    # 距離：前回の距離 ±この範囲の画素だけ使う [m]
-IOU_MIN = 0.3        # 追跡：同じ人とみなす枠の重なり
-DIST_MATCH = 1.0     # 追跡：同じ人とみなす距離の差 [m]
-MAX_AGE = 1.0        # 追跡：この秒数、検出されなければ消す（検出は 5fps なので、0.5 秒だと 2 回続けて見落とすだけで消えてしまう）
-SPEED_WINDOW = 0.5   # 接近速度：直近この秒数の距離に直線を当てはめる
+# 追跡はゆるくつなぐ。同時に映るのはほぼ 1 人なので、同じ人を別人にしてしまうほうが困る
+DIST_MATCH = 1.5     # 追跡：同じ人とみなす距離の差 [m]
+CENTER_MATCH = 1.0   # 追跡：枠が重ならなくても、中心のずれが枠の大きさのこの倍以内なら同じ人とみなす
+MAX_AGE = 1.0        # 追跡：この秒数、検出されなければ消す（検出は 5fps なので、0.5 秒だと 2 回続けて見落とすだけで消えてしまう。長くすると、いなくなった人の枠が残って鳴り続ける）
+DIST_NOISE = 0.05    # 距離フィルタ：1 フレームの距離の測りのばらつき [m]
+DIST_ACCEL = 2.0     # 距離フィルタ：人の速さの変わりやすさ [m/s²]（歩く・止まる・走り出す）
+BOX_NOISE = 6.0      # 枠フィルタ：検出の枠のばらつき [px]
+BOX_ACCEL = 150.0    # 枠フィルタ：枠の動きの変わりやすさ [px/s²]
+MAX_SPEED = 4.0      # 人の速さの上限 [m/s]。これより速い値はノイズなので切る
+SETTLE = 0.15        # 現れてからこの秒数は、速さがまだ定まらないので 0 とする（ついてくるだけの人で鳴らないように。長いと走ってくる人の警告が遅れる）
 MIN_SPEED = 0.1      # 接近判定：この速さ以上で近づいていて（0 にしないのは、測った速さのノイズで鳴ったり止まったりしないため）
 WARN_DIST = 3.5      # 接近判定：かつ、この距離以内 [m]
 MAX_TTC = 3.0        # 接近判定：または、この TTC 以下 [s]（遠くても速く迫る人）
@@ -62,24 +69,85 @@ def is_approaching(dist: float, speed: float, ttc: float | None) -> bool:
     return dist <= WARN_DIST or (ttc is not None and ttc <= MAX_TTC)
 
 
+class ConstantVelocity:
+    """等速モデルのカルマンフィルタ。値ごとに独立に、位置と速さを持つ。
+
+    速さの変わり方（加速度）を白色ノイズとみなす。accel が大きいほど新しい測定にすぐ追いつき、小さいほどならす。
+    """
+
+    def __init__(self, z, noise: float, accel: float, speed_spread: float) -> None:
+        self.x = np.array(z, dtype=float)       # 位置
+        self.v = np.zeros_like(self.x)          # 速さ
+        self.pxx = np.full_like(self.x, noise**2)  # 共分散（位置・位置、位置・速さ、速さ・速さ）
+        self.pxv = np.zeros_like(self.x)
+        self.pvv = np.full_like(self.x, speed_spread**2)
+        self.r = noise**2
+        self.q = accel**2
+
+    def predict(self, dt: float) -> None:
+        if dt <= 0:
+            return
+        self.x = self.x + self.v * dt
+        self.pxx = self.pxx + 2 * dt * self.pxv + dt * dt * self.pvv + self.q * dt**4 / 4
+        self.pxv = self.pxv + dt * self.pvv + self.q * dt**3 / 2
+        self.pvv = self.pvv + self.q * dt**2
+
+    def update(self, z) -> None:
+        s = self.pxx + self.r
+        kx, kv = self.pxx / s, self.pxv / s
+        e = np.asarray(z, dtype=float) - self.x
+        self.x = self.x + kx * e
+        self.v = self.v + kv * e
+        self.pvv = self.pvv - kv * self.pxv
+        self.pxv = self.pxv - kv * self.pxx
+        self.pxx = self.pxx - kx * self.pxx
+
+
+def _box_state(box: Box) -> np.ndarray:
+    x, y, w, h = box
+    return np.array([x + w / 2, y + h / 2, w, h], dtype=float)
+
+
 @dataclass
 class Track:
     id: int
-    box: Box
-    dist: float
+    dist_kf: ConstantVelocity                 # 距離（1 個）
+    box_kf: ConstantVelocity                  # 枠の中心 x・y と幅・高さ（4 個）
+    t: float                                  # フィルタを進めた時刻
     last_seen: float                          # 最後に検出と対応付いた時刻
-    history: deque = field(default_factory=deque)  # (時刻, 距離)
+    born: float                               # 現れた時刻
+
+    @classmethod
+    def start(cls, id: int, box: Box, dist: float, t: float) -> "Track":
+        return cls(
+            id=id,
+            dist_kf=ConstantVelocity([dist], DIST_NOISE, DIST_ACCEL, speed_spread=1.0),
+            box_kf=ConstantVelocity(_box_state(box), BOX_NOISE, BOX_ACCEL, speed_spread=50.0),
+            t=t,
+            last_seen=t,
+            born=t,
+        )
+
+    @property
+    def dist(self) -> float:
+        return float(self.dist_kf.x[0])
+
+    @property
+    def box(self) -> Box:
+        cx, cy, w, h = self.box_kf.x
+        w, h = max(1.0, w), max(1.0, h)
+        return (int(round(cx - w / 2)), int(round(cy - h / 2)), int(round(w)), int(round(h)))
 
     def speed(self) -> float:
-        """直近 SPEED_WINDOW 秒の距離に直線を当てはめた傾き。近づくと正。"""
-        if len(self.history) < 3:
+        """距離フィルタの速さ。近づくと正。"""
+        if self.t - self.born < SETTLE:
             return 0.0
-        t = np.array([h[0] for h in self.history])
-        if t[-1] - t[0] < SPEED_WINDOW / 2:
-            return 0.0
-        z = np.array([h[1] for h in self.history])
-        slope = np.polyfit(t - t[0], z, 1)[0]
-        return float(-slope)
+        return float(np.clip(-self.dist_kf.v[0], -MAX_SPEED, MAX_SPEED))
+
+    def predict(self, t: float) -> None:
+        self.dist_kf.predict(t - self.t)
+        self.box_kf.predict(t - self.t)
+        self.t = t
 
 
 class Tracker:
@@ -94,43 +162,51 @@ class Tracker:
         boxes: 検出の新しい結果。更新がないフレームは None（前回の枠を使い、距離だけ更新する）
         t: 取得時刻 [s]
         """
+        for tr in self.tracks:
+            tr.predict(t)
         if boxes is not None:
             self._match(depth, boxes, t)
 
         for tr in self.tracks:
             z = next_distance(depth, tr.box, tr.dist)
             if z is not None:
-                tr.dist = z
-                tr.history.append((t, z))
-            while tr.history and t - tr.history[0][0] > SPEED_WINDOW:
-                tr.history.popleft()
+                tr.dist_kf.update([z])
 
         self.tracks = [tr for tr in self.tracks if t - tr.last_seen <= MAX_AGE]
         return [self._person(tr) for tr in self.tracks]
 
     def _match(self, depth: np.ndarray, boxes: list[Box], t: float) -> None:
-        """新しい枠と今いる人を、枠の重なりと距離の近さで対応付ける（重なりの大きい順に貪欲に）。"""
+        """新しい枠と今いる人（先読みした枠）を対応付ける。人は 1〜2 人なので、近い組から貪欲に決める。
+
+        枠が重なっているか中心が近く、距離の差が DIST_MATCH 以内なら同じ人とみなす。
+        """
         box_dist = [first_distance(depth, b) for b in boxes]
         pairs = []
         for i, b in enumerate(boxes):
             for j, tr in enumerate(self.tracks):
+                if box_dist[i] is not None and abs(box_dist[i] - tr.dist) > DIST_MATCH:
+                    continue
                 score = iou(b, tr.box)
-                close = box_dist[i] is None or abs(box_dist[i] - tr.dist) <= DIST_MATCH
-                if score >= IOU_MIN and close:
-                    pairs.append((score, i, j))
+                if score == 0:
+                    (bx, by, bw, bh), (tx, ty, tw, th) = b, tr.box
+                    gap = np.hypot(bx + bw / 2 - tx - tw / 2, by + bh / 2 - ty - th / 2)
+                    if gap > CENTER_MATCH * max(tw, th):
+                        continue
+                    score = -gap  # 重なっている組を先に決める
+                pairs.append((score, i, j))
         used_boxes, used_tracks = set(), set()
         for _, i, j in sorted(pairs, reverse=True):
             if i in used_boxes or j in used_tracks:
                 continue
             used_boxes.add(i)
             used_tracks.add(j)
-            self.tracks[j].box = boxes[i]
+            self.tracks[j].box_kf.update(_box_state(boxes[i]))
             self.tracks[j].last_seen = t
 
         for i, b in enumerate(boxes):
             if i in used_boxes or box_dist[i] is None:
                 continue
-            self.tracks.append(Track(id=self._next_id, box=b, dist=box_dist[i], last_seen=t))
+            self.tracks.append(Track.start(self._next_id, b, box_dist[i], t))
             self._next_id += 1
 
     @staticmethod
