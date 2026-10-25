@@ -22,9 +22,9 @@ const BLEND = 0.5; // 前のフレームとの混ぜ具合（大きいほど今�
 const LIGHT = normalize([0.35, 0.8, 0.5]); // 陰を付ける光の向き
 export const VOXEL = 0.04; // 密度の上限：一辺 4cm の箱に点は 1 つ（面なら 1m² あたり約 625 点まで）[m]
 const MIN_PERSON_POINTS = 15; // 人の点がこれより少なければ、点群から円柱を作らない
-const LOW = 0.05; // 円柱は、人の点の 5〜95% の範囲（はみ出した点に引っぱられないように）
-const HIGH = 0.95;
-const MARGIN = 0.05; // 円柱を人の点より少し大きくする [m]（囲んでいるように見せる）
+const LOW = 0.02; // 円柱は、人の点の 2〜98% を囲む（ノイズは取ってあるので、ほぼ全部の点を囲む）
+const HIGH = 0.98;
+const MARGIN = 0.03; // 円柱を人の点より少しだけ大きくする [m]
 
 function normalize(v: number[]): [number, number, number] {
   const n = Math.hypot(...v);
@@ -141,8 +141,8 @@ export class CloudBuilder {
     return n;
   }
 
-  // 直前の build の点群から、人を囲む円柱を作る（地面に立つ）。
-  // 枠の中で人の距離に近い点の左右の広がりから中心と半径を決め、見えている体の手前が円柱の手前に来るよう奥へずらす。
+  // 直前の build の点群から、人を囲む円柱を作る。枠の中で人の距離に近い点を、そのまま囲むだけ：
+  // 中心は点の左右・前後の広がりの真ん中、半径は広がりの大きいほうの半分、上下は点の一番下から一番上まで。
   // 点が少なすぎれば null
   personCylinder(p: Person): Cylinder | null {
     const z = this.prev;
@@ -161,10 +161,10 @@ export class CloudBuilder {
     }
     if (xs.length < MIN_PERSON_POINTS) return null;
     const [x0, x1] = range(xs);
-    const [, y1] = range(ys);
-    const [, front] = range(zs); // 手前（センサーに近い方）
-    const r = Math.max(MIN_RADIUS, (x1 - x0) / 2 + MARGIN);
-    return { x: (x0 + x1) / 2, z: front + MARGIN - r, r, h: Math.max(y1, 0.1) + MARGIN };
+    const [y0, y1] = range(ys);
+    const [z0, z1] = range(zs);
+    const r = Math.max(MIN_RADIUS, Math.max(x1 - x0, z1 - z0) / 2 + MARGIN);
+    return { x: (x0 + x1) / 2, z: (z0 + z1) / 2, r, bottom: Math.max(0, y0 - MARGIN), top: y1 + MARGIN };
   }
 
   private color(z: Float32Array, people: Person[], lut: Uint8ClampedArray, pos: Float32Array, colors: Float32Array) {

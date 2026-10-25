@@ -1,7 +1,7 @@
 // 3D 点群ビュー（仕様書 6章、#22）。
 // 自分（装着者）を中心にしたレーダーのような画面。自分の頭の上から、背中越しに後ろを見下ろす。
-// 地面には自分を中心に 1〜4m の薄い同心円（距離感が分かるように）。人は円柱で囲み、足元の円も描く。
-// 円柱は、人の点群の広がりに合わせる（点が少なければ YOLO の枠から作る）。震えないように、前のフレームと混ぜる。
+// 地面には自分を中心に 1〜4m の薄い同心円（距離感が分かるように）。人は円柱で囲む。
+// 円柱は、見えている人の点をそのまま囲む（点が少なければ YOLO の枠から作る）。震えないように、前のフレームと少し混ぜる。
 // 視点は固定（回さない）。描くのはフレームが届いたときだけなので軽く、発表でも誰が見ても同じ見え方になる。
 // 深度はノイズを取って間引き、密度に上限を付けて（一辺 4cm の箱に 1 点）、縁をぼかした点で描く（cloud.ts）。
 // 点群らしさは残しつつ、近くで密集した点が粒々（集合体）に見えないようにする。点の数に上限があるので、近づいても重くならない。
@@ -19,7 +19,7 @@ const RINGS = [1, 2, 3, 4]; // 自分を中心にした同心円 [m]
 const EYE = new THREE.Vector3(0, 2.4, 0.5); // 視点：自分の頭の上（後ろの範囲が画面いっぱいに入るように）
 const TARGET = new THREE.Vector3(0, 0.5, -2.3); // 見る先：背中越しに後ろ
 const BG = 0x060914;
-const BOX_BLEND = 0.35; // 円柱を前のフレームと混ぜる割合（大きいほど今のフレーム）
+const BOX_BLEND = 0.6; // 円柱を前のフレームと混ぜる割合（大きいほど今のフレーム）
 const POINT_SIZE = VOXEL * 1.1; // 点の大きさ [m]。密度の上限の箱と同じくらいで、となりと少し触れる（重ねすぎると点群らしさがなくなる）
 
 interface Scene {
@@ -29,7 +29,7 @@ interface Scene {
   cloud: THREE.BufferGeometry;
   builder: CloudBuilder;
   smoothed: Map<number, Cylinder>; // 人ごとの、ならした円柱
-  boxes: { edges: THREE.LineSegments; fill: THREE.Mesh; foot: THREE.Mesh }[]; // 人を囲む円柱
+  boxes: { edges: THREE.LineSegments; fill: THREE.Mesh }[]; // 人を囲む円柱
 }
 
 export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
@@ -90,26 +90,24 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
     s.boxes.forEach((b, k) => {
       const p = frame.people[k];
       const label = labels.children[k] as HTMLElement;
-      b.edges.visible = b.fill.visible = b.foot.visible = p !== undefined;
+      b.edges.visible = b.fill.visible = p !== undefined;
       if (!p) {
         label.style.display = "none";
         return;
       }
       const c = smooth(s.smoothed, p.id, s.builder.personCylinder(p) ?? personCylinder(p));
-      for (const o of [b.edges, b.fill, b.foot]) {
-        o.position.set(c.x, 0, c.z);
-        o.scale.set(c.r, c.h, c.r);
+      for (const o of [b.edges, b.fill]) {
+        o.position.set(c.x, c.bottom, c.z);
+        o.scale.set(c.r, c.top - c.bottom, c.r);
       }
-      b.foot.position.y = 0.005;
       const color = p.approaching ? DANGER : SAFE;
       (b.edges.material as THREE.LineBasicMaterial).color.set(color);
       const fill = b.fill.material as THREE.MeshBasicMaterial;
       fill.color.set(color);
       fill.opacity = p.approaching ? 0.22 : 0.08;
-      (b.foot.material as THREE.MeshBasicMaterial).color.set(color);
 
       // ラベルは円柱の上に、HTML で重ねる（文字をくっきり出すため）
-      place(label, new THREE.Vector3(c.x, c.h, c.z), s.camera, host);
+      place(label, new THREE.Vector3(c.x, c.top, c.z), s.camera, host);
       label.className = `cloud-label ${p.approaching ? "cloud-label-danger" : ""}`;
       label.textContent = `ID ${p.id}  ${p.dist.toFixed(2)} m`;
     });
@@ -131,12 +129,14 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
 function smooth(store: Map<number, Cylinder>, id: number, now: Cylinder): Cylinder {
   const prev = store.get(id);
   const mix = (a: number, b: number) => a + (b - a) * BOX_BLEND;
-  const out = prev ? { x: mix(prev.x, now.x), z: mix(prev.z, now.z), r: mix(prev.r, now.r), h: mix(prev.h, now.h) } : now;
+  const out = prev
+    ? { x: mix(prev.x, now.x), z: mix(prev.z, now.z), r: mix(prev.r, now.r), bottom: mix(prev.bottom, now.bottom), top: mix(prev.top, now.top) }
+    : now;
   store.set(id, out);
   return out;
 }
 
-// 半径 1・高さ 1 の円柱の線：上下の円と、縦の線（地面から立つように、下が y = 0）
+// 半径 1・高さ 1 の円柱の線：上下の円と、縦の線（下が y = 0）
 function cylinderLines(): THREE.BufferGeometry {
   const points: THREE.Vector3[] = [];
   const SEG = 48;
@@ -197,17 +197,15 @@ function createScene(host: HTMLDivElement): Scene {
   points.frustumCulled = false; // 点の位置が毎フレーム変わるので、見えない判定をしない
   scene.add(points);
 
-  // 人を囲む円柱（半径 1・高さ 1 の円柱を、位置と大きさで合わせる）と、足元の円
+  // 人を囲む円柱（半径 1・高さ 1 の円柱を、位置と大きさで合わせる）
   const unit = new THREE.CylinderGeometry(1, 1, 1, 48, 1, true).translate(0, 0.5, 0);
   const edgesGeometry = cylinderLines();
-  const footGeometry = new THREE.CircleGeometry(1, 48).rotateX(-Math.PI / 2);
   const boxes = Array.from({ length: MAX_PEOPLE }, () => {
     const edges = new THREE.LineSegments(edgesGeometry, new THREE.LineBasicMaterial({ color: SAFE }));
     const fill = new THREE.Mesh(unit, new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide }));
-    const foot = new THREE.Mesh(footGeometry, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.15, depthWrite: false }));
-    edges.visible = fill.visible = foot.visible = false;
-    scene.add(foot, fill, edges);
-    return { edges, fill, foot };
+    edges.visible = fill.visible = false;
+    scene.add(fill, edges);
+    return { edges, fill };
   });
 
   return { renderer, scene, camera, cloud, builder: new CloudBuilder(), smoothed: new Map(), boxes };

@@ -31,7 +31,7 @@ describe("cloud", () => {
     expect(z[45 * GW + GW / 2]).toBeCloseTo(3.0, 1);
   });
 
-  it("人を囲む円柱は、人の点の広がりに合わせ、手前が人の距離", () => {
+  it("人を囲む円柱は、人の点をそのまま囲む", () => {
     const frame = makeDemoFrame(0, 5.0); // 約 3.0m の人（肩幅 0.45m、背 1.7m）
     const builder = new CloudBuilder();
     builder.build(frame.depth, frame.people, DEPTH_LUT, new Float32Array(GW * GH * 3), new Float32Array(GW * GH * 3));
@@ -39,9 +39,10 @@ describe("cloud", () => {
     expect(c).not.toBeNull();
     expect(c.r).toBeGreaterThan(0.2);
     expect(c.r).toBeLessThan(0.35);
-    expect(c.h).toBeGreaterThan(1.4);
-    expect(c.h).toBeLessThan(1.95);
-    expect(Math.abs(-(c.z + c.r) - frame.people[0].dist)).toBeLessThan(0.3);
+    expect(c.top).toBeGreaterThan(1.4);
+    expect(c.top).toBeLessThan(1.95);
+    expect(c.bottom).toBeLessThan(0.2); // デモの人は地面に立っている（足まで写る）
+    expect(Math.abs(-c.z - frame.people[0].dist)).toBeLessThan(0.3); // 中心が人の点のところ
   });
 
   it("人の点がなければ円柱は作らない", () => {

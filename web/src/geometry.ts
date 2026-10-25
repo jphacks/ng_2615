@@ -47,15 +47,16 @@ export function rangeToWall(i: number, z: number): number {
   return z / -RAY_Z[i];
 }
 
-// 人を囲む円柱（地面に立つ）。x・z は中心、r は半径、h は高さ [m]
+// 人を囲む円柱（縦向き）。x・z は中心、r は半径、bottom・top は下と上の高さ [m]
 export interface Cylinder {
   x: number;
   z: number;
   r: number;
-  h: number;
+  bottom: number;
+  top: number;
 }
 
-export const MIN_RADIUS = 0.2; // 円柱の半径の最小 [m]
+export const MIN_RADIUS = 0.12; // 円柱の半径の最小 [m]
 
 // 人を囲む円柱。人が立っている前提で、YOLO の枠と人の距離だけから作る（点群から作れないとき用）。
 // 半径は枠の幅の半分、高さは枠の上端を人の距離で 3D に直した位置。見えているのは体の手前なので、手前が人の距離になるよう奥へずらす。
@@ -71,5 +72,5 @@ export function personCylinder(p: Person): Cylinder {
   const top = pointAt(row(by) * W + midCol, p.dist);
   const front = pointAt(midRow * W + midCol, p.dist)[2];
   const r = Math.max(MIN_RADIUS, (right[0] - left[0]) / 2);
-  return { x: (left[0] + right[0]) / 2, z: front - r, r, h: Math.max(top[1], 0.1) };
+  return { x: (left[0] + right[0]) / 2, z: front - r, r, bottom: 0, top: Math.max(top[1], 0.1) };
 }

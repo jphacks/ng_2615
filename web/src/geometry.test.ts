@@ -23,8 +23,9 @@ describe("geometry", () => {
     expect(Math.abs(-(c.z + c.r) - p.dist)).toBeLessThan(0.3); // 手前が人の距離
     expect(c.r).toBeGreaterThan(0.18);
     expect(c.r).toBeLessThan(0.3);
-    expect(c.h).toBeGreaterThan(1.5);
-    expect(c.h).toBeLessThan(1.9);
+    expect(c.bottom).toBe(0);
+    expect(c.top).toBeGreaterThan(1.5);
+    expect(c.top).toBeLessThan(1.9);
   });
 
   it("枠が細くても、円柱は細すぎない", () => {
