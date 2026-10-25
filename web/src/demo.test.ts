@@ -31,7 +31,8 @@ test("じわじわ（0.2 m/s）でも、3.5m 以内なら赤", () => {
 
 test("速歩き（1.2 m/s）と走り（2.5 m/s）は赤", () => {
   expect(at(31).people[0].approaching).toBe(true);
-  expect(at(37.1).people[0].approaching).toBe(true); // 約 3.75m でも TTC が短いので赤
+  expect(at(37.1).people[0].approaching).toBe(false); // 現れて 0.1 秒。条件が 0.2 秒続くまでは白
+  expect(at(37.2).people[0].approaching).toBe(true); // 現れて 0.2 秒、約 3.5m。TTC が短いので赤
 });
 
 test("止まると遠ざかって白に戻り、やがて見えなくなる", () => {

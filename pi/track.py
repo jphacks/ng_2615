@@ -32,6 +32,7 @@ MAX_SPEED = 4.0      # 人の速さの上限 [m/s]。予測がどこまでも流
 MIN_SPEED = 0.1      # 接近判定：この速さ以上で近づいていて（0 にしないのは、測った速さのノイズで鳴ったり止まったりしないため）
 WARN_DIST = 3.5      # 接近判定：かつ、この距離以内 [m]
 MAX_TTC = 3.0        # 接近判定：または、この TTC 以下 [s]（遠くても速く迫る人）
+HOLD = 0.2           # 接近判定：上の条件がこの秒数続いたら鳴らす（腕を一瞬振っただけで鳴らないように）。外れたらすぐ戻す
 
 
 def iou(a: Box, b: Box) -> float:
@@ -119,6 +120,7 @@ class Track:
     t: float                                  # フィルタを進めた時刻
     last_seen: float                          # 最後に検出と対応付いた時刻
     hits: int = 1                             # 続けて検出と対応付いた回数
+    approach_since: float | None = None       # 接近の条件が続いている始まりの時刻
     history: deque = field(default_factory=deque)  # (時刻, 距離)
 
     def visible(self, t: float) -> bool:
@@ -199,7 +201,7 @@ class Tracker:
                 tr.measure(z, t)
 
         self.tracks = [tr for tr in self.tracks if t - tr.last_seen <= MAX_AGE]
-        return [self._person(tr) for tr in self.tracks if tr.visible(t)]
+        return [self._person(tr, t) for tr in self.tracks if tr.visible(t)]
 
     def _match(self, depth: np.ndarray, boxes: list[Box], t: float) -> None:
         """新しい枠と今いる人（前の枠）を対応付ける。人は 1〜2 人なので、近い組から貪欲に決める。
@@ -246,14 +248,18 @@ class Tracker:
             self._next_id += 1
 
     @staticmethod
-    def _person(tr: Track) -> Person:
+    def _person(tr: Track, t: float) -> Person:
         v = tr.speed()
         ttc = tr.dist / v if v > 0 else None
+        if not is_approaching(tr.dist, v, ttc):
+            tr.approach_since = None
+        elif tr.approach_since is None:
+            tr.approach_since = t
         return Person(
             id=tr.id,
             box=tr.box,
             dist=tr.dist,
             speed=v,
             ttc=ttc,
-            approaching=is_approaching(tr.dist, v, ttc),
+            approaching=tr.approach_since is not None and t - tr.approach_since >= HOLD,
         )
