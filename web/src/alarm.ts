@@ -9,6 +9,9 @@
 //   3.5m → 2m：ゆっくりした「ピー・ポー」、控えめ
 //   2m → 1m：だんだん速く、高く、鋭く、大きく
 //   1m 未満 ：隙間なく鳴り続け、わずかにずらした音を重ねてざらつかせる（はっきり音の質が変わる）
+//
+// 鳴り始めは小さく、約1秒かけて大きくする（フェードイン）。腕を一瞬振ったような誤検知で驚かせないため。
+// 音量は「危険度で決まる音量 × フェード」。止まってもすぐ（1秒以内）また鳴ったら、フェードは続きから。
 
 const WARN_DIST = 3.5; // この距離で危険度 0（接近判定の 3.5m と同じ）
 const URGENT_TTC = 3.0; // この TTC で危険度 0（接近判定の TTC 3秒と同じ）
@@ -20,6 +23,9 @@ const DUTY = [0.65, 1.0]; // 1音のうち鳴っている割合（1 で隙間な
 const BRIGHT_HZ = [2500, 9000]; // 音の鋭さ（高い倍音をどこまで残すか）
 const VOLUME = [0.18, 0.5];
 const ROUGH_FROM = (WARN_DIST - 1.0) / WARN_DIST; // 危険度がこれを超えたら（1m 未満）、ずらした音を重ねる
+const FADE_FROM = 0.3; // 鳴り始めの音量（本来の音量に対する割合）
+const FADE_S = 1.0; // この秒数で本来の音量になる
+const RESUME_S = 1.0; // 止まってからこの秒数以内にまた鳴ったら、フェードを続きからにする
 
 const lerp = ([a, b]: number[], u: number) => a + (b - a) * u;
 const clamp01 = (x: number) => Math.min(Math.max(x, 0), 1);
@@ -36,6 +42,23 @@ export function dangerOf(people: { dist: number; ttc: number | null }[]): number
   );
 }
 
+// 鳴り始めてからの秒数から、音量にかける割合（FADE_FROM〜1）を出す。
+// 最初はゆっくり、後半で一気に大きくなる（2乗のカーブ）
+export function fadeOf(sinceStart: number): number {
+  const x = clamp01(sinceStart / FADE_S);
+  return FADE_FROM + (1 - FADE_FROM) * x * x;
+}
+
+// また鳴り始めたときの「鳴り始めた時刻」を決める（秒）。
+// 止まってすぐなら、止まっていた間だけ後ろにずらして、フェードを止まったところから続ける。
+// しばらく止まっていたなら、今から小さく鳴り始める。
+export function fadeStartAfter(prevStart: number | null, stoppedAt: number | null, now: number): number {
+  if (prevStart === null || stoppedAt === null || now - stoppedAt > RESUME_S) return now;
+  return prevStart + (now - stoppedAt);
+}
+
+const nowSec = () => performance.now() / 1000;
+
 export class Alarm {
   private ctx: AudioContext | null = null;
   private filter: BiquadFilterNode | null = null;
@@ -43,6 +66,8 @@ export class Alarm {
   private level: number | null = null; // 危険度。null なら鳴らさない
   private timer: ReturnType<typeof setTimeout> | undefined;
   private high = false; // 次に鳴らすのが高い方か
+  private fadeStart: number | null = null; // 鳴り始めた時刻（秒、フェード用）
+  private stoppedAt: number | null = null; // 最後に止まった時刻（秒）
 
   get enabled(): boolean {
     return this.ctx !== null;
@@ -57,7 +82,7 @@ export class Alarm {
       this.filter.connect(this.master).connect(this.ctx.destination);
     }
     void this.ctx.resume();
-    this.siren(0.3); // オンにしたことが分かるように1回鳴らす
+    this.siren(0.3, 1); // オンにしたことが分かるように1回鳴らす
   }
 
   disable(): void {
@@ -73,10 +98,19 @@ export class Alarm {
   update(approaching: { dist: number; ttc: number | null }[]): void {
     const level = dangerOf(approaching);
     const starting = this.level === null && level !== null;
+    const now = nowSec();
+    if (this.level !== null && level === null) this.stoppedAt = now;
+    // 止まってすぐ（一瞬検出が途切れただけ）なら、始まりの合図もフェードもやり直さない
+    const resumed = starting && this.fadeStart !== null && this.stoppedAt !== null && now - this.stoppedAt <= RESUME_S;
+    if (starting) this.fadeStart = fadeStartAfter(this.fadeStart, this.stoppedAt, now);
     this.level = level;
     if (!this.ctx || level === null || this.timer !== undefined) return;
-    if (starting) {
-      this.siren(level);
+    if (starting && !resumed) {
+      // 前の大きい音量が残らないように、鳴り始めの小さい音量にすぐ合わせる（まだ何も鳴っていないので、ぷつっとしない）
+      const t = this.ctx.currentTime;
+      this.master!.gain.cancelScheduledValues(t);
+      this.master!.gain.setValueAtTime(lerp(VOLUME, level) * FADE_FROM, t);
+      this.siren(level, FADE_FROM);
       this.timer = setTimeout(() => this.loop(), 380);
     } else {
       this.loop();
@@ -90,7 +124,7 @@ export class Alarm {
     }
     const u = this.level;
     const t = this.ctx.currentTime;
-    this.setTone(u, t);
+    this.setTone(u, fadeOf(nowSec() - (this.fadeStart ?? nowSec())), t);
 
     const low = lerp(LOW_HZ, u);
     const freq = this.high ? low * Math.SQRT2 : low;
@@ -100,22 +134,28 @@ export class Alarm {
     this.timer = setTimeout(() => this.loop(), noteMs);
   }
 
-  // 危険度に合わせて、鋭さと音量を変える
-  private setTone(u: number, t: number): void {
+  // 危険度に合わせて、鋭さと音量を変える。fade は鳴り始めのフェード（音量にかける割合）
+  private setTone(u: number, fade: number, t: number): void {
     this.filter!.frequency.setTargetAtTime(lerp(BRIGHT_HZ, u), t, 0.05);
-    this.master!.gain.setTargetAtTime(lerp(VOLUME, u), t, 0.05);
+    this.master!.gain.setTargetAtTime(lerp(VOLUME, u) * fade, t, 0.05);
   }
 
-  // 警告が始まった合図：サイレンのように下から上へ上がる音
-  private siren(u: number): void {
+  // 警告が始まった合図：サイレンのように下から上へ上がる音。
+  // 驚かせないように、小さく始めて上がりながら大きくする
+  private siren(u: number, fade: number): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
-    this.setTone(Math.max(u, 0.5), t);
+    this.setTone(u, fade, t);
     const osc = this.ctx.createOscillator();
     osc.type = "sawtooth";
     osc.frequency.setValueAtTime(700, t);
     osc.frequency.exponentialRampToValueAtTime(lerp(LOW_HZ, u) * Math.SQRT2, t + 0.32);
-    const gain = this.envelope(t, 0.34);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.linearRampToValueAtTime(0.25, t + 0.06);
+    gain.gain.linearRampToValueAtTime(0.8, t + 0.3);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+    gain.connect(this.filter!);
     osc.connect(gain);
     osc.start(t);
     osc.stop(t + 0.36);
