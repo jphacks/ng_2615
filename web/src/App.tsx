@@ -35,7 +35,7 @@ export function App() {
     <div className={`app ${warning ? "app-warning" : ""}`}>
       <header className="topbar">
         <div className="brand">
-          <span className="brand-name">USHIROMI</span>
+          <img className="brand-logo" src="/logo.svg" alt="USHIROMI" />
           <span className="brand-sub">夜道の背後を見守る、第三の目</span>
         </div>
         <div className="topbar-actions">
