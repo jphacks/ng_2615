@@ -1,6 +1,6 @@
 // 3D 点群ビュー（仕様書 6章、#22）。
 // 自分（装着者）を中心にしたレーダーのような画面。自分の頭の上から、背中越しに後ろを見下ろす。
-// 地面には自分を中心に 1〜4m の輪、センサーの視野（扇形）、警告が始まる 3.5m の線。人は 3D の直方体で囲み、足元も描く。
+// 地面には自分を中心に 1〜4m の薄い同心円（距離感が分かるように）。人は 3D の直方体で囲み、足元も描く。
 // 視点は固定（回さない）。描くのはフレームが届いたときだけなので軽く、発表でも誰が見ても同じ見え方になる。
 // 深度はノイズを取って間引き、つながった面にして描く（surface.ts）。
 // three.js の場面は一度だけ作り、面と直方体の位置だけを毎フレーム書き換える。
@@ -8,17 +8,15 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { DANGER, DEPTH_LUT, SAFE } from "../colors";
-import { HALF_FOV, personCuboid } from "../geometry";
-import { Z_MAX, type FrameMessage } from "../protocol";
+import { personCuboid } from "../geometry";
+import type { FrameMessage } from "../protocol";
 import { GH, GW, SurfaceBuilder } from "../surface";
 
 const MAX_PEOPLE = 4; // 直方体とラベルを先に作っておく数
-const RINGS = [1, 2, 3, 4]; // 自分を中心にした輪 [m]
-const WARN_DIST = 3.5; // 警告が始まる距離 [m]（pi/track.py と同じ）
+const RINGS = [1, 2, 3, 4]; // 自分を中心にした同心円 [m]
 const EYE = new THREE.Vector3(0, 2.4, 0.5); // 視点：自分の頭の上（後ろの範囲が画面いっぱいに入るように）
 const TARGET = new THREE.Vector3(0, 0.5, -2.3); // 見る先：背中越しに後ろ
 const BG = 0x060914;
-const ACCENT = 0x5b8cff;
 
 interface Scene {
   renderer: THREE.WebGLRenderer;
@@ -32,13 +30,11 @@ interface Scene {
 export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement>(null);
-  const ringLabelsRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<Scene | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
-    const ringLabels = ringLabelsRef.current;
-    if (!host || !ringLabels) return;
+    if (!host) return;
     const s = createScene(host);
     sceneRef.current = s;
 
@@ -48,11 +44,6 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
       s.renderer.setSize(w, h, false);
       s.camera.aspect = w / Math.max(1, h);
       s.camera.updateProjectionMatrix();
-      // 輪の「1 m」などの文字は、視点が動かないので大きさが変わったときだけ置き直す
-      RINGS.forEach((r, k) => {
-        const a = HALF_FOV + 0.05; // 視野の扇形の右外（点群に重ならないように）
-        place(ringLabels.children[k] as HTMLElement, new THREE.Vector3(r * Math.sin(a), 0, -r * Math.cos(a)), s.camera, host);
-      });
       s.renderer.render(s.scene, s.camera);
     };
     resize();
@@ -129,13 +120,6 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
 
   return (
     <div ref={hostRef} className="cloud-host">
-      <div ref={ringLabelsRef} className="cloud-labels">
-        {RINGS.map((r) => (
-          <div key={r} className="cloud-ring-label">
-            {r} m
-          </div>
-        ))}
-      </div>
       <div ref={labelsRef} className="cloud-labels">
         {Array.from({ length: MAX_PEOPLE }, (_, k) => (
           <div key={k} className="cloud-label" style={{ display: "none" }} />
@@ -153,29 +137,15 @@ function place(el: HTMLElement, at: THREE.Vector3, camera: THREE.Camera, host: H
   el.style.top = `${((1 - v.y) / 2) * host.clientHeight}px`;
 }
 
-// 地面に寝かせた扇形（自分を中心に、後ろ向き ±HALF_FOV）
-function sector(inner: number, outer: number, color: THREE.ColorRepresentation, opacity: number): THREE.Mesh {
-  const geometry = new THREE.RingGeometry(inner, outer, 48, 1, Math.PI / 2 - HALF_FOV, 2 * HALF_FOV);
-  geometry.rotateX(-Math.PI / 2); // xy 平面 → 地面（後ろが -z）
-  const mesh = new THREE.Mesh(
-    geometry,
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide }),
-  );
-  mesh.position.y = 0.002;
-  return mesh;
-}
-
 // 地面の円弧（自分を中心に、角度 from〜to。0 が真後ろ）
-function arc(r: number, from: number, to: number, material: THREE.LineBasicMaterial | THREE.LineDashedMaterial): THREE.Line {
+function arc(r: number, from: number, to: number, material: THREE.LineBasicMaterial): THREE.Line {
   const points: THREE.Vector3[] = [];
   const steps = Math.max(8, Math.round(((to - from) / Math.PI) * 64));
   for (let k = 0; k <= steps; k++) {
     const a = from + ((to - from) * k) / steps;
     points.push(new THREE.Vector3(r * Math.sin(a), 0.004, -r * Math.cos(a)));
   }
-  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), material);
-  line.computeLineDistances(); // 点線にするとき用
-  return line;
+  return new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), material);
 }
 
 function createScene(host: HTMLDivElement): Scene {
@@ -191,22 +161,9 @@ function createScene(host: HTMLDivElement): Scene {
   camera.position.copy(EYE);
   camera.lookAt(TARGET);
 
-  // 地面：センサーの視野（扇形）と、警告が始まる 3.5m までの範囲
-  scene.add(sector(0.3, Z_MAX, ACCENT, 0.07));
-  scene.add(sector(0.3, WARN_DIST, DANGER, 0.04));
-
-  // 自分を中心にした輪。視野の外は薄く、視野の中ははっきり
-  const faint = new THREE.LineBasicMaterial({ color: 0x1a2348 });
-  const bright = new THREE.LineBasicMaterial({ color: 0x34437e });
-  for (const r of RINGS) {
-    scene.add(arc(r, HALF_FOV, 2 * Math.PI - HALF_FOV, faint));
-    scene.add(arc(r, -HALF_FOV, HALF_FOV, bright));
-  }
-  scene.add(arc(WARN_DIST, -HALF_FOV, HALF_FOV, new THREE.LineDashedMaterial({ color: DANGER, dashSize: 0.12, gapSize: 0.08 })));
-  for (const side of [-1, 1]) {
-    const end = new THREE.Vector3(side * Z_MAX * Math.sin(HALF_FOV), 0.004, -Z_MAX * Math.cos(HALF_FOV));
-    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.004, 0), end]), bright));
-  }
+  // 地面：自分を中心にした薄い同心円
+  const ring = new THREE.LineBasicMaterial({ color: 0x26315e });
+  for (const r of RINGS) scene.add(arc(r, 0, 2 * Math.PI, ring));
 
   // 深度の面（間引いた格子の点を、つながるところだけ三角形で結ぶ。三角形の数は毎フレーム変わる）
   const surface = new THREE.BufferGeometry();
