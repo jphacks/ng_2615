@@ -68,7 +68,7 @@ export function App() {
                   </button>
                 ))}
               </div>
-              <p className="label">{mode === "2d" ? "背後の深度（240×180）" : "背後の点群（人は直方体）"}</p>
+              <p className="label">{mode === "2d" ? "背後の深度（240×180）" : "背後の 3D（人は直方体）"}</p>
             </div>
             <div className="legend">
               <span>0.3 m</span>
