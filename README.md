@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/ushiromi-logo-horizontal-dark.svg">
+    <img src="assets/logo/ushiromi-logo-horizontal-light.svg" alt="USHIROMI" width="420">
+  </picture>
+</p>
+
 # USHIROMI: 夜道の背後を見守る、第三の目
 
 [![USHIROMI デモ動画](https://img.youtube.com/vi/iDF9A-ZrNrY/maxresdefault.jpg)](https://youtu.be/iDF9A-ZrNrY)
