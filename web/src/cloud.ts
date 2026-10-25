@@ -1,13 +1,13 @@
-// 3D 表示用に深度をきれいにして、つながった面（三角形の網）にする（仕様書 6章「3D 点群ビュー」）。
+// 3D 表示用に、深度のノイズを取って点群にする（仕様書 6章「3D ビュー」）。
 // Pi の負担を増やさないように、ブラウザでやる。240×180 の深度に、毎フレーム次の順でかける。
 //   1. 距離で切る：CLOUD_MAX より遠い点は使わない（遠くはノイズが多い）
 //   2. 画素数を落とす：2×2 をまとめて 120×90 に（有効な画素の中央値）
-//   3. ノイズを取る：3×3 の中央値でならし、まわりとつながらない点（浮いた点、輪郭のでたらめな距離）を消す
+//   3. ノイズを取る：まわりとつながらない点（浮いた点、輪郭のでたらめな距離）を消す。
+//      値はならさない（なめらかにしすぎると点群らしさがなくなるため）
 //   4. 時間でならす：前のフレームと近ければ混ぜる（ちらつきを抑える）
-//   5. 面にする：となり合う 4 点が近い距離なら四角（三角形 2 つ）でつなぐ。距離が飛ぶところ（人と背景のさかい）はつながない
-// 色は深度の色に、面の向きで陰を付ける（立体に見えるように）。人の部分は明るく、接近中は赤く。
+// 色は深度の色に、まわりの点から求めた面の向きで陰を付ける（立体に見えるように）。人の部分は明るく、接近中は赤く。
 
-import { CAM_HEIGHT, CX, CY, FX, FY, PERSON_WINDOW, TILT } from "./geometry";
+import { CAM_HEIGHT, CX, CY, FX, FY, PERSON_WINDOW, TILT, type Cuboid } from "./geometry";
 import { H, W, metersToU8, u8ToMeters, type Person } from "./protocol";
 
 export const STEP = 2; // 画素数を落とす割合
@@ -18,6 +18,10 @@ const JUMP = 0.12; // となりとこれ以上（＋距離の 3%）離れてい�
 const MIN_LINKS = 3; // まわり 8 点のうち、つながっている点がこれより少なければ消す
 const BLEND = 0.5; // 前のフレームとの混ぜ具合（大きいほど今のフレーム）
 const LIGHT = normalize([0.35, 0.8, 0.5]); // 陰を付ける光の向き
+const MIN_PERSON_POINTS = 15; // 人の点がこれより少なければ、点群から直方体を作らない
+const LOW = 0.05; // 直方体は、人の点の 5〜95% の範囲（はみ出した点に引っぱられないように）
+const HIGH = 0.95;
+const MIN_DEPTH = 0.3; // 直方体の奥行きの最小 [m]（見えているのは体の手前の面だけなので、奥へ伸ばす）
 
 function normalize(v: number[]): [number, number, number] {
   const n = Math.hypot(...v);
@@ -42,7 +46,7 @@ for (let j = 0; j < GH; j++) {
 
 const linked = (a: number, b: number) => Math.abs(a - b) <= JUMP + 0.03 * Math.min(a, b);
 
-// 1〜3：距離で切り、2×2 にまとめ、ノイズを取った深度 [m]（0 は使わない）
+// 1〜3：距離で切り、2×2 にまとめ、つながらない点を消した深度 [m]（0 は使わない）
 export function cleanDepth(depth: Uint8Array): Float32Array {
   const coarse = new Float32Array(GW * GH);
   const v = [0, 0, 0, 0];
@@ -59,30 +63,32 @@ export function cleanDepth(depth: Uint8Array): Float32Array {
     }
   }
 
-  // 3×3 の中央値でならし、つながらない点を消す
+  // まわり 8 点のうち、つながっている点が少なければ消す
   const out = new Float32Array(GW * GH);
-  const around = new Array<number>(9);
   for (let j = 0; j < GH; j++) {
     for (let i = 0; i < GW; i++) {
       const z = coarse[j * GW + i];
       if (z === 0) continue;
-      let n = 0;
       let links = 0;
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           const y = j + dy;
           const x = i + dx;
-          if (x < 0 || y < 0 || x >= GW || y >= GH) continue;
+          if ((dx === 0 && dy === 0) || x < 0 || y < 0 || x >= GW || y >= GH) continue;
           const w = coarse[y * GW + x];
-          if (w === 0 || !linked(z, w)) continue;
-          around[n++] = w;
-          if (dx !== 0 || dy !== 0) links++;
+          if (w !== 0 && linked(z, w)) links++;
         }
       }
-      if (links >= MIN_LINKS) out[j * GW + i] = median(around, n);
+      if (links >= MIN_LINKS) out[j * GW + i] = z;
     }
   }
   return out;
+}
+
+// 5〜95% の範囲
+function range(a: number[]): [number, number] {
+  a.sort((x, y) => x - y);
+  return [a[Math.floor(LOW * (a.length - 1))], a[Math.ceil(HIGH * (a.length - 1))]];
 }
 
 function median(a: number[], n: number): number {
@@ -90,19 +96,14 @@ function median(a: number[], n: number): number {
   return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
 }
 
-// 4〜5 を毎フレーム行う。前のフレームを覚えておくので、ビューごとに 1 つ作る
-export class SurfaceBuilder {
+// 毎フレーム点群を作る。前のフレームを覚えておくので、ビューごとに 1 つ作る
+export class CloudBuilder {
   private prev: Float32Array = new Float32Array(GW * GH);
+  private pos = new Float32Array(GW * GH * 3);
+  private rgb = new Float32Array(GW * GH * 3);
 
-  // positions・colors（GW×GH×3）と index（三角形の頂点番号）に書き込み、index の数を返す
-  build(
-    depth: Uint8Array,
-    people: Person[],
-    lut: Uint8ClampedArray,
-    positions: Float32Array,
-    colors: Float32Array,
-    index: Uint32Array,
-  ): number {
+  // 残った点を positions・colors（GW×GH×3 あれば足りる）の前に詰めて書き込み、点の数を返す
+  build(depth: Uint8Array, people: Person[], lut: Uint8ClampedArray, positions: Float32Array, colors: Float32Array): number {
     const z = cleanDepth(depth);
     for (let k = 0; k < z.length; k++) {
       const p = this.prev[k];
@@ -110,36 +111,46 @@ export class SurfaceBuilder {
     }
     this.prev = z;
 
+    const pos = this.pos;
     for (let k = 0; k < z.length; k++) {
-      positions[k * 3] = RX[k] * z[k];
-      positions[k * 3 + 1] = CAM_HEIGHT + RY[k] * z[k];
-      positions[k * 3 + 2] = RZ[k] * z[k];
+      pos[k * 3] = RX[k] * z[k];
+      pos[k * 3 + 1] = CAM_HEIGHT + RY[k] * z[k];
+      pos[k * 3 + 2] = RZ[k] * z[k];
     }
+    this.color(z, people, lut, pos, this.rgb);
 
     let n = 0;
-    for (let j = 0; j + 1 < GH; j++) {
-      for (let i = 0; i + 1 < GW; i++) {
-        const a = j * GW + i;
-        const b = a + 1;
-        const c = a + GW;
-        const d = c + 1;
-        const za = z[a];
-        const zb = z[b];
-        const zc = z[c];
-        const zd = z[d];
-        if (za === 0 || zb === 0 || zc === 0 || zd === 0) continue;
-        if (!linked(za, zb) || !linked(za, zc) || !linked(zd, zb) || !linked(zd, zc)) continue;
-        index[n++] = a;
-        index[n++] = c;
-        index[n++] = b;
-        index[n++] = b;
-        index[n++] = c;
-        index[n++] = d;
+    for (let k = 0; k < z.length; k++) {
+      if (z[k] === 0) continue;
+      positions.set(pos.subarray(k * 3, k * 3 + 3), n * 3);
+      colors.set(this.rgb.subarray(k * 3, k * 3 + 3), n * 3);
+      n++;
+    }
+    return n;
+  }
+
+  // 直前の build の点群から、人を囲む直方体を作る（地面に沿った向き、下の面は地面）。
+  // 枠の中で人の距離に近い点の広がりに合わせる。点が少なすぎれば null
+  personCuboid(p: Person): Cuboid | null {
+    const z = this.prev;
+    const xs: number[] = [];
+    const ys: number[] = [];
+    const zs: number[] = [];
+    const [bx, by, bw, bh] = p.box;
+    for (let j = Math.max(0, Math.floor(by / STEP)); j < Math.min(GH, Math.ceil((by + bh) / STEP)); j++) {
+      for (let i = Math.max(0, Math.floor(bx / STEP)); i < Math.min(GW, Math.ceil((bx + bw) / STEP)); i++) {
+        const k = j * GW + i;
+        if (z[k] === 0 || Math.abs(z[k] - p.dist) > PERSON_WINDOW) continue;
+        xs.push(this.pos[k * 3]);
+        ys.push(this.pos[k * 3 + 1]);
+        zs.push(this.pos[k * 3 + 2]);
       }
     }
-
-    this.color(z, people, lut, positions, colors);
-    return n;
+    if (xs.length < MIN_PERSON_POINTS) return null;
+    const [x0, x1] = range(xs);
+    const [, y1] = range(ys);
+    const [z0, z1] = range(zs);
+    return { min: [x0, 0, Math.min(z0, z1 - MIN_DEPTH)], max: [x1, Math.max(y1, 0.1), z1] };
   }
 
   private color(z: Float32Array, people: Person[], lut: Uint8ClampedArray, pos: Float32Array, colors: Float32Array) {
