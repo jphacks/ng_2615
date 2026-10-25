@@ -47,17 +47,20 @@ export function rangeToWall(i: number, z: number): number {
   return z / -RAY_Z[i];
 }
 
-export interface Cuboid {
-  min: [number, number, number];
-  max: [number, number, number];
+// 人を囲む円柱（地面に立つ）。x・z は中心、r は半径、h は高さ [m]
+export interface Cylinder {
+  x: number;
+  z: number;
+  r: number;
+  h: number;
 }
 
-export const BODY_DEPTH = 0.4; // 人の体の厚み [m]（直方体の奥行き）
+export const MIN_RADIUS = 0.2; // 円柱の半径の最小 [m]
 
-// 人を囲む直方体（地面に沿った向き）。人が立っている前提で、YOLO の枠と人の距離だけから作る。
-// 幅と上の面は、枠の端を人の距離のところで 3D に直した位置。手前の面が人の距離で、奥へ体の厚みだけ伸ばす（底面は長方形）。
-// 下の面はいつも地面。足元は胴より遠いので、枠の下端を人の距離で 3D に直すと地面より上になり、箱が浮いて見えるため。
-export function personCuboid(p: Person): Cuboid {
+// 人を囲む円柱。人が立っている前提で、YOLO の枠と人の距離だけから作る（点群から作れないとき用）。
+// 半径は枠の幅の半分、高さは枠の上端を人の距離で 3D に直した位置。見えているのは体の手前なので、手前が人の距離になるよう奥へずらす。
+// 下はいつも地面。足元は胴より遠いので、枠の下端を人の距離で 3D に直すと地面より上になり、浮いて見えるため。
+export function personCylinder(p: Person): Cylinder {
   const [bx, by, bw, bh] = p.box;
   const col = (x: number) => Math.min(W - 1, Math.max(0, Math.round(x)));
   const row = (y: number) => Math.min(H - 1, Math.max(0, Math.round(y)));
@@ -67,8 +70,6 @@ export function personCuboid(p: Person): Cuboid {
   const right = pointAt(midRow * W + col(bx + bw - 1), p.dist);
   const top = pointAt(row(by) * W + midCol, p.dist);
   const front = pointAt(midRow * W + midCol, p.dist)[2];
-  return {
-    min: [left[0], 0, front - BODY_DEPTH],
-    max: [right[0], Math.max(top[1], 0.1), front],
-  };
+  const r = Math.max(MIN_RADIUS, (right[0] - left[0]) / 2);
+  return { x: (left[0] + right[0]) / 2, z: front - r, r, h: Math.max(top[1], 0.1) };
 }

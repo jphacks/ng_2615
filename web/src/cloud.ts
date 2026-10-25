@@ -7,7 +7,7 @@
 //   4. 時間でならす：前のフレームと近ければ混ぜる（ちらつきを抑える）
 // 色は深度の色に、まわりの点から求めた面の向きで陰を付ける（立体に見えるように）。人の部分は明るく、接近中は赤く。
 
-import { CAM_HEIGHT, CX, CY, FX, FY, PERSON_WINDOW, TILT, type Cuboid } from "./geometry";
+import { CAM_HEIGHT, CX, CY, FX, FY, MIN_RADIUS, PERSON_WINDOW, TILT, type Cylinder } from "./geometry";
 import { H, W, metersToU8, u8ToMeters, type Person } from "./protocol";
 
 export const STEP = 2; // 画素数を落とす割合
@@ -18,10 +18,10 @@ const JUMP = 0.12; // となりとこれ以上（＋距離の 3%）離れてい�
 const MIN_LINKS = 3; // まわり 8 点のうち、つながっている点がこれより少なければ消す
 const BLEND = 0.5; // 前のフレームとの混ぜ具合（大きいほど今のフレーム）
 const LIGHT = normalize([0.35, 0.8, 0.5]); // 陰を付ける光の向き
-const MIN_PERSON_POINTS = 15; // 人の点がこれより少なければ、点群から直方体を作らない
-const LOW = 0.05; // 直方体は、人の点の 5〜95% の範囲（はみ出した点に引っぱられないように）
+const MIN_PERSON_POINTS = 15; // 人の点がこれより少なければ、点群から円柱を作らない
+const LOW = 0.05; // 円柱は、人の点の 5〜95% の範囲（はみ出した点に引っぱられないように）
 const HIGH = 0.95;
-const MIN_DEPTH = 0.3; // 直方体の奥行きの最小 [m]（見えているのは体の手前の面だけなので、奥へ伸ばす）
+const MARGIN = 0.05; // 円柱を人の点より少し大きくする [m]（囲んでいるように見せる）
 
 function normalize(v: number[]): [number, number, number] {
   const n = Math.hypot(...v);
@@ -129,9 +129,10 @@ export class CloudBuilder {
     return n;
   }
 
-  // 直前の build の点群から、人を囲む直方体を作る（地面に沿った向き、下の面は地面）。
-  // 枠の中で人の距離に近い点の広がりに合わせる。点が少なすぎれば null
-  personCuboid(p: Person): Cuboid | null {
+  // 直前の build の点群から、人を囲む円柱を作る（地面に立つ）。
+  // 枠の中で人の距離に近い点の左右の広がりから中心と半径を決め、見えている体の手前が円柱の手前に来るよう奥へずらす。
+  // 点が少なすぎれば null
+  personCylinder(p: Person): Cylinder | null {
     const z = this.prev;
     const xs: number[] = [];
     const ys: number[] = [];
@@ -149,8 +150,9 @@ export class CloudBuilder {
     if (xs.length < MIN_PERSON_POINTS) return null;
     const [x0, x1] = range(xs);
     const [, y1] = range(ys);
-    const [z0, z1] = range(zs);
-    return { min: [x0, 0, Math.min(z0, z1 - MIN_DEPTH)], max: [x1, Math.max(y1, 0.1), z1] };
+    const [, front] = range(zs); // 手前（センサーに近い方）
+    const r = Math.max(MIN_RADIUS, (x1 - x0) / 2 + MARGIN);
+    return { x: (x0 + x1) / 2, z: front + MARGIN - r, r, h: Math.max(y1, 0.1) + MARGIN };
   }
 
   private color(z: Float32Array, people: Person[], lut: Uint8ClampedArray, pos: Float32Array, colors: Float32Array) {

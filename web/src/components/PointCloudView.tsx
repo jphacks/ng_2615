@@ -1,24 +1,25 @@
 // 3D 点群ビュー（仕様書 6章、#22）。
 // 自分（装着者）を中心にしたレーダーのような画面。自分の頭の上から、背中越しに後ろを見下ろす。
-// 地面には自分を中心に 1〜4m の薄い同心円（距離感が分かるように）。人は 3D の直方体で囲み、足元も描く。
-// 直方体は、人の点群の広がりに合わせる（点が少なければ YOLO の枠から作る）。震えないように、前のフレームと混ぜる。
+// 地面には自分を中心に 1〜4m の薄い同心円（距離感が分かるように）。人は円柱で囲み、足元の円も描く。
+// 円柱は、人の点群の広がりに合わせる（点が少なければ YOLO の枠から作る）。震えないように、前のフレームと混ぜる。
 // 視点は固定（回さない）。描くのはフレームが届いたときだけなので軽く、発表でも誰が見ても同じ見え方になる。
 // 深度はノイズを取って間引き、丸い点の点群で描く（cloud.ts）。
-// three.js の場面は一度だけ作り、点と直方体の位置だけを毎フレーム書き換える。
+// three.js の場面は一度だけ作り、点と円柱の位置だけを毎フレーム書き換える。
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { DANGER, DEPTH_LUT, SAFE } from "../colors";
-import { personCuboid, type Cuboid } from "../geometry";
+import { personCylinder, type Cylinder } from "../geometry";
 import type { FrameMessage } from "../protocol";
 import { CloudBuilder, GH, GW } from "../cloud";
 
-const MAX_PEOPLE = 4; // 直方体とラベルを先に作っておく数
+const MAX_PEOPLE = 4; // 円柱とラベルを先に作っておく数
 const RINGS = [1, 2, 3, 4]; // 自分を中心にした同心円 [m]
 const EYE = new THREE.Vector3(0, 2.4, 0.5); // 視点：自分の頭の上（後ろの範囲が画面いっぱいに入るように）
 const TARGET = new THREE.Vector3(0, 0.5, -2.3); // 見る先：背中越しに後ろ
 const BG = 0x060914;
-const BOX_BLEND = 0.35; // 直方体を前のフレームと混ぜる割合（大きいほど今のフレーム）
+const BOX_BLEND = 0.35; // 円柱を前のフレームと混ぜる割合（大きいほど今のフレーム）
+const MAX_POINT_PX = 6; // 点の大きさの上限 [画面の px]。近い点が大きくなりすぎると、重なって描くのが重くなるため
 
 interface Scene {
   renderer: THREE.WebGLRenderer;
@@ -26,8 +27,8 @@ interface Scene {
   camera: THREE.PerspectiveCamera;
   cloud: THREE.BufferGeometry;
   builder: CloudBuilder;
-  smoothed: Map<number, Cuboid>; // 人ごとの、ならした直方体
-  boxes: { edges: THREE.LineSegments; fill: THREE.Mesh; foot: THREE.Mesh }[];
+  smoothed: Map<number, Cylinder>; // 人ごとの、ならした円柱
+  boxes: { edges: THREE.LineSegments; fill: THREE.Mesh; foot: THREE.Mesh }[]; // 人を囲む円柱
 }
 
 export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
@@ -93,15 +94,12 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
         label.style.display = "none";
         return;
       }
-      const { min, max } = smooth(s.smoothed, p.id, s.builder.personCuboid(p) ?? personCuboid(p));
-      const size = new THREE.Vector3(...max).sub(new THREE.Vector3(...min));
-      const center = new THREE.Vector3(...min).addScaledVector(size, 0.5);
-      for (const o of [b.edges, b.fill]) {
-        o.position.copy(center);
-        o.scale.copy(size);
+      const c = smooth(s.smoothed, p.id, s.builder.personCylinder(p) ?? personCylinder(p));
+      for (const o of [b.edges, b.fill, b.foot]) {
+        o.position.set(c.x, 0, c.z);
+        o.scale.set(c.r, c.h, c.r);
       }
-      b.foot.position.set(center.x, 0.005, center.z);
-      b.foot.scale.set(size.x, size.z, 1);
+      b.foot.position.y = 0.005;
       const color = p.approaching ? DANGER : SAFE;
       (b.edges.material as THREE.LineBasicMaterial).color.set(color);
       const fill = b.fill.material as THREE.MeshBasicMaterial;
@@ -109,8 +107,8 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
       fill.opacity = p.approaching ? 0.22 : 0.08;
       (b.foot.material as THREE.MeshBasicMaterial).color.set(color);
 
-      // ラベルは直方体の上に、HTML で重ねる（文字をくっきり出すため）
-      place(label, new THREE.Vector3(center.x, max[1], center.z), s.camera, host);
+      // ラベルは円柱の上に、HTML で重ねる（文字をくっきり出すため）
+      place(label, new THREE.Vector3(c.x, c.h, c.z), s.camera, host);
       label.className = `cloud-label ${p.approaching ? "cloud-label-danger" : ""}`;
       label.textContent = `ID ${p.id}  ${p.dist.toFixed(2)} m`;
     });
@@ -128,13 +126,29 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
   );
 }
 
-// 人ごとに、前のフレームの直方体と混ぜる
-function smooth(store: Map<number, Cuboid>, id: number, now: Cuboid): Cuboid {
+// 人ごとに、前のフレームの円柱と混ぜる
+function smooth(store: Map<number, Cylinder>, id: number, now: Cylinder): Cylinder {
   const prev = store.get(id);
-  const mix = (a: number[], b: number[]) => a.map((v, k) => v + (b[k] - v) * BOX_BLEND) as Cuboid["min"];
-  const out = prev ? { min: mix(prev.min, now.min), max: mix(prev.max, now.max) } : now;
+  const mix = (a: number, b: number) => a + (b - a) * BOX_BLEND;
+  const out = prev ? { x: mix(prev.x, now.x), z: mix(prev.z, now.z), r: mix(prev.r, now.r), h: mix(prev.h, now.h) } : now;
   store.set(id, out);
   return out;
+}
+
+// 半径 1・高さ 1 の円柱の線：上下の円と、縦の線（地面から立つように、下が y = 0）
+function cylinderLines(): THREE.BufferGeometry {
+  const points: THREE.Vector3[] = [];
+  const SEG = 48;
+  for (let k = 0; k < SEG; k++) {
+    const a0 = (2 * Math.PI * k) / SEG;
+    const a1 = (2 * Math.PI * (k + 1)) / SEG;
+    for (const y of [0, 1]) points.push(new THREE.Vector3(Math.cos(a0), y, Math.sin(a0)), new THREE.Vector3(Math.cos(a1), y, Math.sin(a1)));
+  }
+  for (let k = 0; k < 8; k++) {
+    const a = (2 * Math.PI * k) / 8;
+    points.push(new THREE.Vector3(Math.cos(a), 0, Math.sin(a)), new THREE.Vector3(Math.cos(a), 1, Math.sin(a)));
+  }
+  return new THREE.BufferGeometry().setFromPoints(points);
 }
 
 // 3D の点 at に HTML の文字を置く（画面の外や後ろなら隠す）
@@ -180,18 +194,18 @@ function createScene(host: HTMLDivElement): Scene {
   cloud.setDrawRange(0, 0);
   const points = new THREE.Points(
     cloud,
-    new THREE.PointsMaterial({ size: 0.03, vertexColors: true, map: dotTexture(), alphaTest: 0.5 }),
+    pointMaterial(),
   );
   points.frustumCulled = false; // 点の位置が毎フレーム変わるので、見えない判定をしない
   scene.add(points);
 
-  // 人を囲む直方体（大きさ 1 の箱を、位置と大きさで合わせる）と、足元の長方形
-  const unit = new THREE.BoxGeometry(1, 1, 1);
-  const edgesGeometry = new THREE.EdgesGeometry(unit);
-  const footGeometry = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+  // 人を囲む円柱（半径 1・高さ 1 の円柱を、位置と大きさで合わせる）と、足元の円
+  const unit = new THREE.CylinderGeometry(1, 1, 1, 48, 1, true).translate(0, 0.5, 0);
+  const edgesGeometry = cylinderLines();
+  const footGeometry = new THREE.CircleGeometry(1, 48).rotateX(-Math.PI / 2);
   const boxes = Array.from({ length: MAX_PEOPLE }, () => {
     const edges = new THREE.LineSegments(edgesGeometry, new THREE.LineBasicMaterial({ color: SAFE }));
-    const fill = new THREE.Mesh(unit, new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }));
+    const fill = new THREE.Mesh(unit, new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide }));
     const foot = new THREE.Mesh(footGeometry, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.35, depthWrite: false }));
     edges.visible = fill.visible = foot.visible = false;
     scene.add(foot, fill, edges);
@@ -199,6 +213,19 @@ function createScene(host: HTMLDivElement): Scene {
   });
 
   return { renderer, scene, camera, cloud, builder: new CloudBuilder(), smoothed: new Map(), boxes };
+}
+
+// 丸い点。大きさは 3D の中で 3cm だが、画面の上で MAX_POINT_PX を超えないようにする（近くの点が大きくなりすぎて重くならないように）
+function pointMaterial(): THREE.PointsMaterial {
+  const material = new THREE.PointsMaterial({ size: 0.03, vertexColors: true, map: dotTexture(), alphaTest: 0.5 });
+  const maxPx = MAX_POINT_PX * Math.min(window.devicePixelRatio || 1, 2);
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <fog_vertex>",
+      `#include <fog_vertex>\n  gl_PointSize = min(gl_PointSize, ${maxPx.toFixed(1)});`,
+    );
+  };
+  return material;
 }
 
 // 丸い点の形（白い円）
