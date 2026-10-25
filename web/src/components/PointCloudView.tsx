@@ -1,36 +1,41 @@
 // 3D 点群ビュー（仕様書 6章、#22）。
-// 深度を 3D の点にして描き、人は 3D の直方体で囲む。地面に 1〜4m の弧と視野の線。ドラッグで回転、ホイールで拡大。
-// 30fps で更新するので、three.js の場面は一度だけ作り、点と直方体の位置だけを毎フレーム書き換える。
+// 自分（装着者）を中心にしたレーダーのような画面。自分の頭の少し前・上から、背中越しに後ろを見下ろす。
+// 地面には自分を中心に 1〜4m の輪、センサーの視野（扇形）、警告が始まる 3.5m の線。人は 3D の直方体で囲み、足元も描く。
+// 視点は固定（回さない）。描くのはフレームが届いたときだけなので軽く、発表でも誰が見ても同じ見え方になる。
+// three.js の場面は一度だけ作り、点と直方体の位置だけを毎フレーム書き換える。
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { DANGER, DEPTH_LUT, SAFE } from "../colors";
-import { CAM_HEIGHT, HALF_FOV, fillCloud, personCuboid } from "../geometry";
+import { HALF_FOV, fillCloud, personCuboid } from "../geometry";
 import { H, W, Z_MAX, type FrameMessage } from "../protocol";
 
 const MAX_PEOPLE = 4; // 直方体とラベルを先に作っておく数
-const RINGS = [1, 2, 3, 4]; // 地面の弧 [m]
-const HOME = new THREE.Vector3(1.3, 2.3, 1.3); // 最初の視点（センサーの右後ろ上）
-const TARGET = new THREE.Vector3(0, 0.5, -2.4);
+const RINGS = [1, 2, 3, 4]; // 自分を中心にした輪 [m]
+const WARN_DIST = 3.5; // 警告が始まる距離 [m]（pi/track.py と同じ）
+const EYE = new THREE.Vector3(0, 2.9, 2.3); // 視点：自分の少し前・上（自分が画面の下に入るように）
+const TARGET = new THREE.Vector3(0, 0.4, -1.7); // 見る先：背中越しに後ろの地面
+const BG = 0x060914;
+const ACCENT = 0x5b8cff;
 
 interface Scene {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
-  controls: OrbitControls;
   cloud: THREE.BufferGeometry;
-  boxes: { edges: THREE.LineSegments; fill: THREE.Mesh }[];
+  boxes: { edges: THREE.LineSegments; fill: THREE.Mesh; foot: THREE.Mesh }[];
 }
 
 export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement>(null);
+  const ringLabelsRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<Scene | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
-    if (!host) return;
+    const ringLabels = ringLabelsRef.current;
+    if (!host || !ringLabels) return;
     const s = createScene(host);
     sceneRef.current = s;
 
@@ -40,25 +45,22 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
       s.renderer.setSize(w, h, false);
       s.camera.aspect = w / Math.max(1, h);
       s.camera.updateProjectionMatrix();
+      // 輪の「1 m」などの文字は、視点が動かないので大きさが変わったときだけ置き直す
+      RINGS.forEach((r, k) => {
+        const a = HALF_FOV + 0.05; // 視野の扇形の右外（点群に重ならないように）
+        place(ringLabels.children[k] as HTMLElement, new THREE.Vector3(r * Math.sin(a), 0, -r * Math.cos(a)), s.camera, host);
+      });
+      place(ringLabels.children[RINGS.length] as HTMLElement, new THREE.Vector3(0, 0, 0.2), s.camera, host);
+      s.renderer.render(s.scene, s.camera);
     };
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(host);
-    // ドラッグ中もなめらかに動くように、フレームの届く速さとは別に描き続ける
-    s.renderer.setAnimationLoop(() => {
-      s.controls.update();
-      s.renderer.render(s.scene, s.camera);
-    });
 
     return () => {
       observer.disconnect();
-      s.renderer.setAnimationLoop(null);
-      s.controls.dispose();
       s.scene.traverse((o) => {
-        if (o instanceof THREE.Sprite) {
-          o.material.map?.dispose();
-          o.material.dispose();
-        } else if (o instanceof THREE.Mesh || o instanceof THREE.Points || o instanceof THREE.Line) {
+        if (o instanceof THREE.Mesh || o instanceof THREE.Points || o instanceof THREE.Line) {
           o.geometry.dispose();
           (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => m.dispose());
         }
@@ -71,8 +73,9 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
 
   useEffect(() => {
     const s = sceneRef.current;
+    const host = hostRef.current;
     const labels = labelsRef.current;
-    if (!s || !labels || !frame) return;
+    if (!s || !host || !labels || !frame) return;
 
     const positions = s.cloud.getAttribute("position") as THREE.BufferAttribute;
     const colors = s.cloud.getAttribute("color") as THREE.BufferAttribute;
@@ -81,138 +84,150 @@ export function PointCloudView({ frame }: { frame: FrameMessage | null }) {
     positions.needsUpdate = true;
     colors.needsUpdate = true;
 
-    const host = s.renderer.domElement;
     s.boxes.forEach((b, k) => {
       const p = frame.people[k];
-      const cuboid = p ? personCuboid(frame.depth, p) : null;
       const label = labels.children[k] as HTMLElement;
-      b.edges.visible = b.fill.visible = cuboid !== null;
-      if (!p || !cuboid) {
+      b.edges.visible = b.fill.visible = b.foot.visible = p !== undefined;
+      if (!p) {
         label.style.display = "none";
         return;
       }
-      const size = new THREE.Vector3(...cuboid.max).sub(new THREE.Vector3(...cuboid.min));
-      const center = new THREE.Vector3(...cuboid.min).addScaledVector(size, 0.5);
+      const { min, max } = personCuboid(p);
+      const size = new THREE.Vector3(...max).sub(new THREE.Vector3(...min));
+      const center = new THREE.Vector3(...min).addScaledVector(size, 0.5);
       for (const o of [b.edges, b.fill]) {
         o.position.copy(center);
         o.scale.copy(size);
       }
-      (b.edges.material as THREE.LineBasicMaterial).color.set(p.approaching ? DANGER : SAFE);
-      b.fill.visible = p.approaching;
+      b.foot.position.set(center.x, 0.005, center.z);
+      b.foot.scale.set(size.x, size.z, 1);
+      const color = p.approaching ? DANGER : SAFE;
+      (b.edges.material as THREE.LineBasicMaterial).color.set(color);
+      const fill = b.fill.material as THREE.MeshBasicMaterial;
+      fill.color.set(color);
+      fill.opacity = p.approaching ? 0.22 : 0.08;
+      (b.foot.material as THREE.MeshBasicMaterial).color.set(color);
 
       // ラベルは直方体の上に、HTML で重ねる（文字をくっきり出すため）
-      const top = new THREE.Vector3(center.x, cuboid.max[1], center.z).project(s.camera);
-      const visible = top.z < 1;
-      label.style.display = visible ? "" : "none";
-      label.style.left = `${((top.x + 1) / 2) * host.clientWidth}px`;
-      label.style.top = `${((1 - top.y) / 2) * host.clientHeight}px`;
+      place(label, new THREE.Vector3(center.x, max[1], center.z), s.camera, host);
       label.className = `cloud-label ${p.approaching ? "cloud-label-danger" : ""}`;
       label.textContent = `ID ${p.id}  ${p.dist.toFixed(2)} m`;
     });
+    s.renderer.render(s.scene, s.camera);
   }, [frame]);
-
-  const resetView = () => {
-    const s = sceneRef.current;
-    if (!s) return;
-    s.camera.position.copy(HOME);
-    s.controls.target.copy(TARGET);
-  };
 
   return (
     <div ref={hostRef} className="cloud-host">
+      <div ref={ringLabelsRef} className="cloud-labels">
+        {RINGS.map((r) => (
+          <div key={r} className="cloud-ring-label">
+            {r} m
+          </div>
+        ))}
+        <div className="cloud-self-label">あなた</div>
+      </div>
       <div ref={labelsRef} className="cloud-labels">
         {Array.from({ length: MAX_PEOPLE }, (_, k) => (
           <div key={k} className="cloud-label" style={{ display: "none" }} />
         ))}
       </div>
-      <button type="button" className="button cloud-reset" onClick={resetView}>
-        視点を戻す
-      </button>
-      <p className="cloud-hint">ドラッグで回転 · ホイールで拡大</p>
     </div>
   );
+}
+
+// 3D の点 at に HTML の文字を置く（画面の外や後ろなら隠す）
+function place(el: HTMLElement, at: THREE.Vector3, camera: THREE.Camera, host: HTMLElement) {
+  const v = at.clone().project(camera);
+  el.style.display = v.z < 1 ? "" : "none";
+  el.style.left = `${((v.x + 1) / 2) * host.clientWidth}px`;
+  el.style.top = `${((1 - v.y) / 2) * host.clientHeight}px`;
+}
+
+// 地面に寝かせた扇形（自分を中心に、後ろ向き ±HALF_FOV）
+function sector(inner: number, outer: number, color: THREE.ColorRepresentation, opacity: number): THREE.Mesh {
+  const geometry = new THREE.RingGeometry(inner, outer, 48, 1, Math.PI / 2 - HALF_FOV, 2 * HALF_FOV);
+  geometry.rotateX(-Math.PI / 2); // xy 平面 → 地面（後ろが -z）
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide }),
+  );
+  mesh.position.y = 0.002;
+  return mesh;
+}
+
+// 地面の円弧（自分を中心に、角度 from〜to。0 が真後ろ）
+function arc(r: number, from: number, to: number, material: THREE.LineBasicMaterial | THREE.LineDashedMaterial): THREE.Line {
+  const points: THREE.Vector3[] = [];
+  const steps = Math.max(8, Math.round(((to - from) / Math.PI) * 64));
+  for (let k = 0; k <= steps; k++) {
+    const a = from + ((to - from) * k) / steps;
+    points.push(new THREE.Vector3(r * Math.sin(a), 0.004, -r * Math.cos(a)));
+  }
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), material);
+  line.computeLineDistances(); // 点線にするとき用
+  return line;
 }
 
 function createScene(host: HTMLDivElement): Scene {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.setClearColor(0x0a0e28);
+  renderer.setClearColor(BG);
   renderer.domElement.className = "cloud-canvas";
   host.prepend(renderer.domElement);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(50, 4 / 3, 0.05, 50);
-  camera.position.copy(HOME);
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.copy(TARGET);
-  controls.enableDamping = true;
-  controls.maxDistance = 12;
-  controls.maxPolarAngle = Math.PI * 0.49; // 地面の下には回り込まない
+  scene.fog = new THREE.Fog(BG, 4.5, 9); // 遠くほど暗く（奥行きが分かるように）
+  const camera = new THREE.PerspectiveCamera(55, 4 / 3, 0.05, 30);
+  camera.position.copy(EYE);
+  camera.lookAt(TARGET);
+
+  // 地面：センサーの視野（扇形）と、警告が始まる 3.5m までの範囲
+  scene.add(sector(0.3, Z_MAX, ACCENT, 0.07));
+  scene.add(sector(0.3, WARN_DIST, DANGER, 0.04));
+
+  // 自分を中心にした輪。視野の外は薄く、視野の中ははっきり
+  const faint = new THREE.LineBasicMaterial({ color: 0x1a2348 });
+  const bright = new THREE.LineBasicMaterial({ color: 0x34437e });
+  for (const r of RINGS) {
+    scene.add(arc(r, HALF_FOV, 2 * Math.PI - HALF_FOV, faint));
+    scene.add(arc(r, -HALF_FOV, HALF_FOV, bright));
+  }
+  scene.add(arc(WARN_DIST, -HALF_FOV, HALF_FOV, new THREE.LineDashedMaterial({ color: DANGER, dashSize: 0.12, gapSize: 0.08 })));
+  for (const side of [-1, 1]) {
+    const end = new THREE.Vector3(side * Z_MAX * Math.sin(HALF_FOV), 0.004, -Z_MAX * Math.cos(HALF_FOV));
+    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.004, 0), end]), bright));
+  }
+
+  // 自分：足元の円
+  const self = new THREE.Mesh(
+    new THREE.CircleGeometry(0.14, 32).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.9 }),
+  );
+  self.position.y = 0.006;
+  scene.add(self);
+  scene.add(arc(0.24, 0, 2 * Math.PI, new THREE.LineBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.5 })));
 
   // 点群（測れた画素だけを前に詰めて、その数だけ描く）
   const cloud = new THREE.BufferGeometry();
   cloud.setAttribute("position", new THREE.BufferAttribute(new Float32Array(W * H * 3), 3).setUsage(THREE.DynamicDrawUsage));
   cloud.setAttribute("color", new THREE.BufferAttribute(new Float32Array(W * H * 3), 3).setUsage(THREE.DynamicDrawUsage));
   cloud.setDrawRange(0, 0);
-  const points = new THREE.Points(cloud, new THREE.PointsMaterial({ size: 0.03, vertexColors: true }));
+  const points = new THREE.Points(cloud, new THREE.PointsMaterial({ size: 0.024, vertexColors: true }));
   points.frustumCulled = false; // 点の位置が毎フレーム変わるので、見えない判定をしない
   scene.add(points);
 
-  // 地面：センサーの真下から 1〜4m の弧と、視野の両端の線
-  const guide = new THREE.LineBasicMaterial({ color: 0x3a4680, transparent: true, opacity: 0.8 });
-  for (const r of RINGS) {
-    const arc: THREE.Vector3[] = [];
-    for (let k = 0; k <= 32; k++) {
-      const a = -HALF_FOV + (2 * HALF_FOV * k) / 32;
-      arc.push(new THREE.Vector3(r * Math.sin(a), 0, -r * Math.cos(a)));
-    }
-    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(arc), guide));
-    scene.add(ringLabel(`${r} m`, r));
-  }
-  for (const side of [-1, 1]) {
-    const end = new THREE.Vector3(side * Z_MAX * Math.sin(HALF_FOV), 0, -Z_MAX * Math.cos(HALF_FOV));
-    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), end]), guide));
-  }
-
-  // センサー（肩の高さの小さな箱）と、地面までの線
-  const sensor = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.06), new THREE.MeshBasicMaterial({ color: 0x6c7cff }));
-  sensor.position.set(0, CAM_HEIGHT, 0);
-  scene.add(sensor);
-  scene.add(
-    new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, CAM_HEIGHT, 0)]),
-      guide,
-    ),
-  );
-
-  // 人を囲む直方体（大きさ 1 の箱を、位置と大きさで合わせる）
+  // 人を囲む直方体（大きさ 1 の箱を、位置と大きさで合わせる）と、足元の長方形
   const unit = new THREE.BoxGeometry(1, 1, 1);
   const edgesGeometry = new THREE.EdgesGeometry(unit);
+  const footGeometry = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
   const boxes = Array.from({ length: MAX_PEOPLE }, () => {
     const edges = new THREE.LineSegments(edgesGeometry, new THREE.LineBasicMaterial({ color: SAFE }));
-    const fill = new THREE.Mesh(
-      unit,
-      new THREE.MeshBasicMaterial({ color: DANGER, transparent: true, opacity: 0.18, depthWrite: false }),
-    );
-    edges.visible = fill.visible = false;
-    scene.add(edges, fill);
-    return { edges, fill };
+    const fill = new THREE.Mesh(unit, new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }));
+    const foot = new THREE.Mesh(footGeometry, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.35, depthWrite: false }));
+    edges.visible = fill.visible = foot.visible = false;
+    scene.add(foot, fill, edges);
+    return { edges, fill, foot };
   });
 
-  return { renderer, scene, camera, controls, cloud, boxes };
-}
-
-// 弧の右端に置く「1 m」などの文字
-function ringLabel(text: string, r: number): THREE.Sprite {
-  const canvas = Object.assign(document.createElement("canvas"), { width: 128, height: 64 });
-  const ctx = canvas.getContext("2d")!;
-  ctx.fillStyle = "#8a96c8";
-  ctx.font = "600 34px ui-sans-serif, system-ui, sans-serif";
-  ctx.textBaseline = "middle";
-  ctx.fillText(text, 8, 32);
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthWrite: false }));
-  sprite.scale.set(0.36, 0.18, 1);
-  const a = HALF_FOV + 0.08;
-  sprite.position.set(r * Math.sin(a) + 0.2, 0.02, -r * Math.cos(a));
-  return sprite;
+  return { renderer, scene, camera, cloud, boxes };
 }

@@ -81,37 +81,27 @@ export interface Cuboid {
   max: [number, number, number];
 }
 
-const LOW = 0.05; // 直方体は、人の点の 5〜95% の範囲（輪郭のでたらめな距離に引っぱられないように）
-const HIGH = 0.95;
-const MIN_POINTS = 20;
-const MIN_SIZE = 0.15; // 直方体の一辺の最小 [m]（人の点が平らに並んでも、箱に見えるように）
+export const BODY_DEPTH = 0.4; // 人の体の厚み [m]（直方体の奥行き）
 
-// 人を囲む直方体（地面に沿った向き）。枠の中で、その人の距離に近い画素だけを使う。点が少なすぎれば null。
-export function personCuboid(depth: Uint8Array, p: Person): Cuboid | null {
-  const xs: number[] = [];
-  const ys: number[] = [];
-  const zs: number[] = [];
-  forEachPersonPixel(depth, p, (i, r) => {
-    xs.push(RAY_X[i] * r);
-    ys.push(CAM_HEIGHT + RAY_Y[i] * r);
-    zs.push(RAY_Z[i] * r);
-  });
-  if (xs.length < MIN_POINTS) return null;
-  const min: [number, number, number] = [0, 0, 0];
-  const max: [number, number, number] = [0, 0, 0];
-  [xs, ys, zs].forEach((a, k) => {
-    a.sort((s, t) => s - t);
-    let lo = a[Math.floor(LOW * (a.length - 1))];
-    let hi = a[Math.ceil(HIGH * (a.length - 1))];
-    if (hi - lo < MIN_SIZE) {
-      const mid = (lo + hi) / 2;
-      lo = mid - MIN_SIZE / 2;
-      hi = mid + MIN_SIZE / 2;
-    }
-    min[k] = lo;
-    max[k] = hi;
-  });
-  return { min, max };
+// 人を囲む直方体（地面に沿った向き）。人が立っている前提で、YOLO の枠と人の距離だけから作る。
+// 幅・高さは枠の端を人の距離のところで 3D に直した大きさ。手前の面が人の距離で、奥へ体の厚みだけ伸ばす（底面は長方形）。
+// 枠の下が画面の下で切れているとき（足が写っていない）は、地面まで伸ばす。
+export function personCuboid(p: Person): Cuboid {
+  const [bx, by, bw, bh] = p.box;
+  const col = (x: number) => Math.min(W - 1, Math.max(0, Math.round(x)));
+  const row = (y: number) => Math.min(H - 1, Math.max(0, Math.round(y)));
+  const midRow = row(by + bh / 2);
+  const midCol = col(bx + bw / 2);
+  const left = pointAt(midRow * W + col(bx), p.dist);
+  const right = pointAt(midRow * W + col(bx + bw - 1), p.dist);
+  const top = pointAt(row(by) * W + midCol, p.dist);
+  const bottom = pointAt(row(by + bh - 1) * W + midCol, p.dist);
+  const front = pointAt(midRow * W + midCol, p.dist)[2];
+  const ground = by + bh >= H - 1 ? 0 : Math.max(0, bottom[1]);
+  return {
+    min: [left[0], ground, front - BODY_DEPTH],
+    max: [right[0], Math.max(top[1], ground + 0.1), front],
+  };
 }
 
 function forEachPersonPixel(depth: Uint8Array, p: Person, visit: (i: number, r: number) => void) {

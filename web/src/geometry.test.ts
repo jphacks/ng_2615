@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEPTH_LUT } from "./colors";
 import { makeDemoFrame } from "./demo";
-import { CAM_HEIGHT, CX, CY, fillCloud, personCuboid, pointAt } from "./geometry";
+import { BODY_DEPTH, CAM_HEIGHT, CX, CY, fillCloud, personCuboid, pointAt } from "./geometry";
 import { H, W } from "./protocol";
 
 describe("geometry", () => {
@@ -26,21 +26,22 @@ describe("geometry", () => {
     for (let k = n - W; k < n; k++) expect(Math.abs(positions[k * 3 + 1])).toBeLessThan(0.05);
   });
 
-  it("人を囲む直方体は、その人の距離のあたりにあって、人くらいの大きさ", () => {
-    const frame = makeDemoFrame(0, 2.0); // 3.8m でついてくる人
+  it("人を囲む直方体は、YOLO の枠と人の距離から、人くらいの大きさで、その距離に立つ", () => {
+    const frame = makeDemoFrame(0, 2.0); // 3.8m でついてくる人（肩幅 0.45m、背 1.7m）
     const p = frame.people[0];
-    const box = personCuboid(frame.depth, p)!;
-    expect(box).not.toBeNull();
-    const centerZ = (box.min[2] + box.max[2]) / 2;
-    expect(Math.abs(-centerZ - p.dist)).toBeLessThan(0.3);
-    expect(box.max[0] - box.min[0]).toBeGreaterThan(0.25); // 肩幅くらい
-    expect(box.max[0] - box.min[0]).toBeLessThan(0.8);
-    expect(box.max[1] - box.min[1]).toBeGreaterThan(1.0); // 背の高さくらい
-    expect(box.max[2] - box.min[2]).toBeGreaterThanOrEqual(0.15);
+    const box = personCuboid(p);
+    expect(Math.abs(-box.max[2] - p.dist)).toBeLessThan(0.3); // 手前の面が人の距離
+    expect(box.max[2] - box.min[2]).toBeCloseTo(BODY_DEPTH); // 奥行きは体の厚み
+    expect(box.max[0] - box.min[0]).toBeGreaterThan(0.35);
+    expect(box.max[0] - box.min[0]).toBeLessThan(0.6);
+    expect(box.min[1]).toBeLessThan(0.1); // 地面に立つ
+    expect(box.max[1]).toBeGreaterThan(1.5);
+    expect(box.max[1]).toBeLessThan(1.9);
   });
 
-  it("人の点が足りなければ直方体は出さない", () => {
-    const depth = new Uint8Array(W * H);
-    expect(personCuboid(depth, { id: 1, box: [10, 10, 20, 40], dist: 2, speed: 0, ttc: null, approaching: false })).toBeNull();
+  it("足が写っていない（枠の下が画面の下で切れている）ときは、地面まで伸ばす", () => {
+    const box = personCuboid({ id: 1, box: [90, 20, 60, H - 20], dist: 1.2, speed: 0, ttc: null, approaching: false });
+    expect(box.min[1]).toBe(0);
+    expect(box.max[1]).toBeGreaterThan(1.4);
   });
 });

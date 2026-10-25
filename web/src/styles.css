@@ -295,7 +295,6 @@ body {
   display: block;
   width: 100%;
   height: 100%;
-  touch-action: none; /* スマホでもドラッグで回せるように */
 }
 
 .cloud-labels {
@@ -321,23 +320,21 @@ body {
   color: #fff;
 }
 
-.cloud-reset {
+.cloud-ring-label,
+.cloud-self-label {
   position: absolute;
-  right: 10px;
-  bottom: 10px;
-  padding: 5px 10px;
-  font-size: 12px;
-}
-
-.cloud-hint {
-  position: absolute;
-  left: 12px;
-  bottom: 10px;
-  margin: 0;
+  transform: translate(4px, -50%);
   color: var(--muted);
   font-size: 11px;
-  pointer-events: none;
+  font-weight: 600;
+  white-space: nowrap;
 }
+
+.cloud-self-label {
+  transform: translate(-50%, 4px);
+  color: var(--accent);
+}
+
 
 /* 右側の欄 */
 .side {
