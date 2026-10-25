@@ -21,10 +21,10 @@ USHIROMI は、夜道を歩く本人と、帰りを待つ人の両方の「安�
 
 ### 製品説明（具体的な製品の説明）
 <p align="center">
-  <img src="assets/hardware/device.jpg" alt="USHIROMI の試作機：背後向きの ToF センサーと Raspberry Pi 4" width="600">
+  <img src="assets/hardware/device.jpg" alt="リュックの上に固定した USHIROMI の試作機：背後向きの ToF センサーと Raspberry Pi 4" width="420">
 </p>
 
-リュックの肩ベルトなどに、ToF センサー（Arducam ToF B0410）を背後に向けて固定して使います。処理をする Raspberry Pi 4 とモバイルバッテリーは、リュックの中に入れます。センサーと Pi のケーブルは短い（15cm）ので、Pi は肩ベルトのポケットやリュックの上の方など、センサーのすぐ近くに置きます。
+リュックの上に、ToF センサー（Arducam ToF B0410）を背後に向けて、処理をする Raspberry Pi 4 と一緒に固定して使います（試作では布テープで固定）。センサーと Pi のケーブルは短い（15cm）ので、Pi はセンサーのすぐ近くに置きます。モバイルバッテリーはリュックの中に入れます。
 
 1. センサーが背後の距離（深度）と振幅（反射の強さ）を 30fps で取得する
 2. 振幅画像から YOLOX-Nano で人を検出し、深度から人までの距離を求める
