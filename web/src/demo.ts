@@ -8,10 +8,11 @@ const FPS = 25;
 const FX = 171; // 焦点距離 [px]
 const CAM_HEIGHT = 1.4; // 肩の高さ [m]
 const TILT = (10 * Math.PI) / 180; // 下向きの角度
-// 接近判定（仕様書 5章、pi/track.py と同じ）：近づいていて、3.5m 以内か TTC 3 秒以下
+// 接近判定（仕様書 5章、pi/track.py と同じ）：近づいていて、3.5m 以内か TTC 3 秒以下が、0.2 秒続いたら
 const MIN_SPEED = 0.1; // [m/s]（ノイズで鳴ったり止まったりしない最小限）
 const WARN_DIST = 3.5; // [m]
 const MAX_TTC = 3.0; // [s]
+const HOLD = 0.2; // [s] 上の条件がこの秒数続いたら赤（腕を一瞬振っただけで鳴らないように）
 
 // [秒, 始めの距離, 終わりの距離]、null はいない
 // 近づく場面のあとは毎回「止まる（装着者が歩くので遠ざかる）→ 見えなくなる」
@@ -45,6 +46,13 @@ function distanceAt(t: number): { z: number | null; speed: number } {
     rest -= duration;
   }
   return { z: null, speed: 0 };
+}
+
+// 時刻 t [s] に、接近の条件を満たしているか
+function approachingAt(t: number): boolean {
+  const { z, speed } = distanceAt(t);
+  if (z === null || speed < MIN_SPEED) return false;
+  return z <= WARN_DIST || z / speed <= MAX_TTC;
 }
 
 // 地面からの高さ height [m]、距離 z [m] の点が写る行
@@ -82,7 +90,8 @@ export function makeDemoFrame(seq: number, t: number): FrameMessage {
       dist: z,
       speed,
       ttc,
-      approaching: speed >= MIN_SPEED && (z <= WARN_DIST || (ttc !== null && ttc <= MAX_TTC)),
+      // 条件が HOLD 秒続いたら（デモの距離の変わり方は単純なので、今と HOLD 秒前の両方で見る）
+      approaching: approachingAt(t) && approachingAt(t - HOLD),
     });
   }
   return { seq, t: Date.now(), w: W, h: H, fps: FPS, people, depth };
