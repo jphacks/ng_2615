@@ -1,17 +1,21 @@
 // 画面の組み立て（仕様書 6章）。
-// 上部に警告の帯、左に深度ビュー、右に状態と人の一覧、右上に接続状態と共有ボタン。
+// 上部に警告の帯、左に深度ビュー（2D と 3D を切り替え）、右に状態と人の一覧、右上に接続状態と共有ボタン。
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Alarm } from "./alarm";
 import { DepthView } from "./components/DepthView";
 import { ShareButton } from "./components/ShareButton";
 import { SidePanel } from "./components/SidePanel";
 import { useFrameStream } from "./hooks/useFrameStream";
 
+// three.js は大きいので、3D に切り替えたときに読み込む（2D の画面を早く出すため）
+const PointCloudView = lazy(() => import("./components/PointCloudView").then((m) => ({ default: m.PointCloudView })));
+
 export function App() {
   const { frame, source, receivedFps } = useFrameStream();
   const alarm = useMemo(() => new Alarm(), []);
   const [soundOn, setSoundOn] = useState(false);
+  const [mode, setMode] = useState<"2d" | "3d">("2d");
 
   const approaching = frame?.people.filter((p) => p.approaching) ?? [];
   const warning = approaching.length > 0;
@@ -49,7 +53,23 @@ export function App() {
       <main className="layout">
         <section className="card view">
           <div className="view-head">
-            <p className="label">背後の深度（240×180）</p>
+            <div className="view-title">
+              <div className="segmented" role="tablist">
+                {(["2d", "3d"] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === m}
+                    className={mode === m ? "segmented-on" : ""}
+                    onClick={() => setMode(m)}
+                  >
+                    {m === "2d" ? "2D" : "3D"}
+                  </button>
+                ))}
+              </div>
+              <p className="label">{mode === "2d" ? "背後の深度（240×180）" : "背後の点群（人は直方体）"}</p>
+            </div>
             <div className="legend">
               <span>0.3 m</span>
               <span className="legend-bar" />
@@ -57,7 +77,13 @@ export function App() {
             </div>
           </div>
           <div className="view-frame">
-            <DepthView frame={frame} />
+            {mode === "2d" ? (
+              <DepthView frame={frame} />
+            ) : (
+              <Suspense fallback={null}>
+                <PointCloudView frame={frame} />
+              </Suspense>
+            )}
             {/* 帯は深度ビューの上に重ねる（出たり消えたりしてもレイアウトが動かない） */}
             <div className={`banner ${warning ? "banner-show" : ""}`} role="alert">
               WARNING　後方から接近

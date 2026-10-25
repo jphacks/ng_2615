@@ -2,12 +2,10 @@
 // 流れは pi/fake_sensor.py の SCENARIO と同じ：ついてくる → いろいろな速さで近づく人（0.8・0.5・0.2・1.2・2.5 m/s）。
 // Pi がいないので、接近の判定もここでする（本物はブラウザでは判定しない）。
 
+import { CAM_HEIGHT, FX, TILT, rangeToGround, rangeToWall } from "./geometry";
 import { H, W, metersToU8, type FrameMessage, type Person } from "./protocol";
 
 const FPS = 25;
-const FX = 171; // 焦点距離 [px]
-const CAM_HEIGHT = 1.4; // 肩の高さ [m]
-const TILT = (10 * Math.PI) / 180; // 下向きの角度
 // 接近判定（仕様書 5章、pi/track.py と同じ）：近づいていて、3.5m 以内か TTC 3 秒以下
 const MIN_SPEED = 0.1; // [m/s]（ノイズで鳴ったり止まったりしない最小限）
 const WARN_DIST = 3.5; // [m]
@@ -52,16 +50,12 @@ function rowOf(height: number, z: number): number {
   return H / 2 + FX * Math.tan(Math.atan2(CAM_HEIGHT - height, z) - TILT);
 }
 
-// 地面だけのときの深度（行ごとに同じ）
-const ground = Array.from({ length: H }, (_, y) => {
-  const angle = TILT + Math.atan((y - H / 2) / FX);
-  return angle > 0 ? metersToU8(CAM_HEIGHT / Math.sin(angle)) : 0;
-});
+// 地面だけのときの深度（3D 点群ビューで地面が平らに見えるように、画素ごとに地面までの距離を出す）
+const ground = Uint8Array.from({ length: W * H }, (_, i) => metersToU8(rangeToGround(i)));
 
 // 時刻 t [s] のデモフレーム（テストでも使う）
 export function makeDemoFrame(seq: number, t: number): FrameMessage {
-  const depth = new Uint8Array(W * H);
-  for (let y = 0; y < H; y++) depth.fill(ground[y], y * W, (y + 1) * W);
+  const depth = ground.slice();
 
   const people: Person[] = [];
   const { z, speed } = distanceAt(t);
@@ -72,8 +66,10 @@ export function makeDemoFrame(seq: number, t: number): FrameMessage {
     const x1 = Math.min(W, Math.ceil(W / 2 + (FX * (x + halfWidth)) / z));
     const y0 = Math.max(0, Math.floor(rowOf(1.7, z)));
     const y1 = Math.min(H, Math.ceil(rowOf(0, z)));
-    const b = metersToU8(z);
-    for (let y = y0; y < y1; y++) depth.fill(b, y * W + x0, y * W + x1);
+    // 人は、水平に z 先に立っている板とみなす
+    for (let y = y0; y < y1; y++) {
+      for (let i = y * W + x0; i < y * W + x1; i++) depth[i] = metersToU8(rangeToWall(i, z));
+    }
 
     const ttc = speed > 0 ? z / speed : null;
     people.push({
