@@ -77,29 +77,39 @@ def test_same_id_even_if_box_jumps():
     """枠が重ならないほど跳ねても、中心が近く距離も同じなら同じ人のまま（ほぼ 1 人しか映らないので、ゆるくつなぐ）。"""
     depth = np.full((H, W), 2.0, dtype=np.float32)
     tracker = Tracker()
-    a = tracker.update(depth, [(100, 40, 30, 80)], 0.0)
-    b = tracker.update(depth, [(135, 40, 30, 80)], 0.2)
+    tracker.update(depth, [(100, 40, 30, 80)], 0.0)
+    a = tracker.update(depth, [(100, 40, 30, 80)], 0.2)
+    b = tracker.update(depth, [(135, 40, 30, 80)], 0.4)
     assert [p.id for p in a] == [p.id for p in b] == [1]
 
 
-def test_box_moves_between_detections():
-    """検出のあいだのフレームでも、枠は人の動きに合わせて先読みで動く。"""
+def test_shown_after_two_detections_in_a_row():
+    """1 回だけの検出（YOLO の間違い）は人として出さない。2 回続けて検出されたら出す。"""
     depth = np.full((H, W), 2.0, dtype=np.float32)
     tracker = Tracker()
-    for k in range(10):  # 右へ 50 px/s
-        tracker.update(depth, [(100 + 10 * k, 40, 30, 80)], 0.2 * k)
-    x0 = tracker.update(depth, None, 1.9)[0].box[0]
-    x1 = tracker.update(depth, None, 2.0)[0].box[0]
-    assert x1 > x0
+    assert tracker.update(depth, [(100, 40, 30, 80)], 0.0) == []
+    assert tracker.update(depth, [], 0.2) == []  # 次の検出でいなかった → 捨てる
+    assert tracker.tracks == []
+    tracker.update(depth, [(100, 40, 30, 80)], 0.4)
+    assert [p.id for p in tracker.update(depth, [(101, 40, 30, 80)], 0.6)] == [2]
+
+
+def test_box_is_the_latest_detection():
+    """枠は YOLO の最新の枠そのまま。検出のあいだのフレームも、その枠を置いておく。"""
+    depth = np.full((H, W), 2.0, dtype=np.float32)
+    tracker = Tracker()
+    tracker.update(depth, [(100, 40, 30, 80)], 0.0)
+    assert tracker.update(depth, [(104, 41, 31, 79)], 0.2)[0].box == (104, 41, 31, 79)
+    assert tracker.update(depth, None, 0.3)[0].box == (104, 41, 31, 79)
 
 
 def test_constant_velocity_filter_finds_speed():
     rng = np.random.default_rng(0)
-    kf = ConstantVelocity([3.0], noise=0.05, accel=2.0, speed_spread=1.0)
+    kf = ConstantVelocity(3.0, noise=0.05, accel=1.0, speed_spread=1.0)
     for k in range(1, 31):  # 1.0 m/s で近づく、30fps、ノイズ 5cm
         kf.predict(1 / 30)
-        kf.update([3.0 - k / 30 + rng.normal(0, 0.05)])
-    assert abs(kf.v[0] + 1.0) < 0.2
+        kf.update(3.0 - k / 30 + rng.normal(0, 0.05))
+    assert abs(kf.v + 1.0) < 0.2
 
 
 def test_only_detected_people_are_shown_and_ring():
