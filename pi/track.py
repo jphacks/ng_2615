@@ -3,6 +3,8 @@
 距離と枠は、人の動きを想定した等速モデルのカルマンフィルタでならす（#20）。
 距離は毎フレーム測れるので、速さもそのフィルタから出す。枠は検出（5fps）のときだけ測れるので、
 あいだのフレームは動きを先読みして枠を動かす。
+
+カルマンフィルタは追跡の補助。表示と警告は、いま検出されている人（SHOW_AGE 以内）だけ。
 """
 
 from dataclasses import dataclass
@@ -15,7 +17,8 @@ DIST_WINDOW = 0.4    # 距離：前回の距離 ±この範囲の画素だけ使
 # 追跡はゆるくつなぐ。同時に映るのはほぼ 1 人なので、同じ人を別人にしてしまうほうが困る
 DIST_MATCH = 1.5     # 追跡：同じ人とみなす距離の差 [m]
 CENTER_MATCH = 1.0   # 追跡：枠が重ならなくても、中心のずれが枠の大きさのこの倍以内なら同じ人とみなす
-MAX_AGE = 1.0        # 追跡：この秒数、検出されなければ消す（検出は 5fps なので、0.5 秒だと 2 回続けて見落とすだけで消えてしまう。長くすると、いなくなった人の枠が残って鳴り続ける）
+SHOW_AGE = 0.5       # 表示と警告：最後に検出されてからこの秒数以内の人だけ（検出は 5fps なので、1 回見落とすまでは出し続ける）
+MAX_AGE = 2.0        # 追跡：この秒数、検出されなければ忘れる。それまでは表示も警告もしないが、また検出されたら同じ人としてつなぐ
 DIST_NOISE = 0.05    # 距離フィルタ：1 フレームの距離の測りのばらつき [m]
 DIST_ACCEL = 2.0     # 距離フィルタ：人の速さの変わりやすさ [m/s²]（歩く・止まる・走り出す）
 BOX_NOISE = 6.0      # 枠フィルタ：検出の枠のばらつき [px]
@@ -117,6 +120,10 @@ class Track:
     last_seen: float                          # 最後に検出と対応付いた時刻
     born: float                               # 現れた時刻
 
+    def visible(self, t: float) -> bool:
+        """いま検出されている（表示と警告の対象）。"""
+        return t - self.last_seen <= SHOW_AGE
+
     @classmethod
     def start(cls, id: int, box: Box, dist: float, t: float) -> "Track":
         return cls(
@@ -145,9 +152,20 @@ class Track:
         return float(np.clip(-self.dist_kf.v[0], -MAX_SPEED, MAX_SPEED))
 
     def predict(self, t: float) -> None:
-        self.dist_kf.predict(t - self.t)
-        self.box_kf.predict(t - self.t)
+        """見えている間だけ先読みする。見えなくなったら最後の場所で止めておく（どこまでも流れていかないように）。"""
+        if self.visible(t):
+            self.dist_kf.predict(t - self.t)
+            self.box_kf.predict(t - self.t)
         self.t = t
+
+    def detected(self, box: Box, dist: float | None, t: float) -> None:
+        """検出と対応付いた。しばらく見えていなかったなら、ID はそのままでフィルタを測り直しから始める。"""
+        if not self.visible(t) and dist is not None:
+            fresh = Track.start(self.id, box, dist, t)
+            self.dist_kf, self.box_kf, self.born = fresh.dist_kf, fresh.box_kf, t
+        else:
+            self.box_kf.update(_box_state(box))
+        self.last_seen = t
 
 
 class Tracker:
@@ -159,7 +177,7 @@ class Tracker:
         """毎フレーム呼ぶ。
 
         depth: float32 (H, W) [m]
-        boxes: 検出の新しい結果。更新がないフレームは None（前回の枠を使い、距離だけ更新する）
+        boxes: 検出の新しい結果。更新がないフレームは None（枠は先読みし、距離だけ測る）
         t: 取得時刻 [s]
         """
         for tr in self.tracks:
@@ -167,13 +185,13 @@ class Tracker:
         if boxes is not None:
             self._match(depth, boxes, t)
 
-        for tr in self.tracks:
+        for tr in [tr for tr in self.tracks if tr.visible(t)]:
             z = next_distance(depth, tr.box, tr.dist)
             if z is not None:
                 tr.dist_kf.update([z])
 
         self.tracks = [tr for tr in self.tracks if t - tr.last_seen <= MAX_AGE]
-        return [self._person(tr) for tr in self.tracks]
+        return [self._person(tr) for tr in self.tracks if tr.visible(t)]
 
     def _match(self, depth: np.ndarray, boxes: list[Box], t: float) -> None:
         """新しい枠と今いる人（先読みした枠）を対応付ける。人は 1〜2 人なので、近い組から貪欲に決める。
@@ -200,8 +218,7 @@ class Tracker:
                 continue
             used_boxes.add(i)
             used_tracks.add(j)
-            self.tracks[j].box_kf.update(_box_state(boxes[i]))
-            self.tracks[j].last_seen = t
+            self.tracks[j].detected(boxes[i], box_dist[i], t)
 
         for i, b in enumerate(boxes):
             if i in used_boxes or box_dist[i] is None:

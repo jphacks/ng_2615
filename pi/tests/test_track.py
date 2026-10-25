@@ -102,6 +102,21 @@ def test_constant_velocity_filter_finds_speed():
     assert abs(kf.v[0] + 1.0) < 0.2
 
 
+def test_only_detected_people_are_shown_and_ring():
+    """検出されなくなった人は、0.5 秒で表示も警告も消える。2 秒以内にまた検出されたら同じ人としてつなぐ。"""
+    tracker = Tracker()
+    box = (100, 40, 30, 80)
+    for k in range(10):  # 1 m/s で近づく
+        depth = np.full((H, W), 3.0 - 0.1 * k, dtype=np.float32)
+        people = tracker.update(depth, [box], 0.1 * k)
+    assert people[0].approaching
+    depth = np.full((H, W), 2.0, dtype=np.float32)
+    assert tracker.update(depth, None, 1.3) != []  # 1 回見落とすくらいでは消さない
+    assert tracker.update(depth, None, 1.5) == []  # いなくなった人で鳴り続けない
+    back = tracker.update(depth, [box], 2.5)
+    assert [p.id for p in back] == [1]
+
+
 def test_person_is_removed_after_disappearing():
     r = run_scenario(12.0)
     assert r[11.0] == []
